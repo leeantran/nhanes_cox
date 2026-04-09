@@ -179,21 +179,21 @@ create_km <- function(group_var, event_var, model_name) {
   form_svy <- as.formula(paste("Surv(time_months,", event_var, ") ~", group_var))
   res_logrank <- svylogrank(form_svy, design = masld_design)
   
-  # 2. Bóc tách P-value bọc thép (Xử lý việc survey package giấu P khi có >2 nhóm)
+  # 2. Bóc tách P-value CHUẨN XÁC NHẤT cho package survey (> 2 nhóm)
   if (!is.null(res_logrank$p.value)) {
     p_val <- res_logrank$p.value
-  } else if (is.list(res_logrank) && !is.null(res_logrank[[2]]$p)) {
-    p_val <- res_logrank[[2]]$p
-  } else if (is.list(res_logrank) && !is.null(res_logrank[[1]]$p.value)) {
-    p_val <- res_logrank[[1]]$p.value
   } else {
-    p_val <- NA
+    # Khi so sánh >= 3 nhóm, res_logrank[[2]] là vector chứa [Chi-square, df]
+    chisq_stat <- res_logrank[[2]][1]
+    df_stat <- res_logrank[[2]][2]
+    # Tự tính P-value từ Chi-square và df
+    p_val <- pchisq(chisq_stat, df_stat, lower.tail = FALSE)
   }
   
   p_val <- as.numeric(p_val)
   
   # 3. Format dòng chữ P-value in lên biểu đồ
-  if (length(p_val) == 0 || is.na(p_val)) {
+  if (is.na(p_val)) {
     p_str <- "Weighted P: N/A"
   } else if (p_val < 0.001) {
     p_str <- "Weighted P < 0.001"
@@ -239,15 +239,15 @@ create_km <- function(group_var, event_var, model_name) {
   return(p)
 }
 
-p_acm1 <- create_km("Q_acm_m1", "status_acm", "ACM: TyHGB")
-p_acm2 <- create_km("Q_acm_m2", "status_acm", "ACM: TyHGB+ABSI")
-p_acm3 <- create_km("Q_acm_m3", "status_acm", "ACM: TyHGB+WWI")
-p_acm4 <- create_km("Q_acm_m4", "status_acm", "ACM: TyHGB+WHtR")
+p_acm1 <- create_km("Q_acm_m1", "status_acm", "TyHGB")
+p_acm2 <- create_km("Q_acm_m2", "status_acm", "TyHGB_ABSI")
+p_acm3 <- create_km("Q_acm_m3", "status_acm", "TyHGB_WWI")
+p_acm4 <- create_km("Q_acm_m4", "status_acm", "TyHGB_WHtR")
 
-p_cvm1 <- create_km("Q_cvm_m1", "status_cvm", "CVM: TyHGB")
-p_cvm2 <- create_km("Q_cvm_m2", "status_cvm", "CVM: TyHGB+ABSI")
-p_cvm3 <- create_km("Q_cvm_m3", "status_cvm", "CVM: TyHGB+WWI")
-p_cvm4 <- create_km("Q_cvm_m4", "status_cvm", "CVM: TyHGB+WHtR")
+p_cvm1 <- create_km("Q_cvm_m1", "status_cvm", "TyHGB")
+p_cvm2 <- create_km("Q_cvm_m2", "status_cvm", "TyHGB_ABSI")
+p_cvm3 <- create_km("Q_cvm_m3", "status_cvm", "TyHGB_WWI")
+p_cvm4 <- create_km("Q_cvm_m4", "status_cvm", "TyHGB_WHtR")
 
 arrange_ggsurvplots(list(p_acm1, p_acm2, p_acm3, p_acm4, p_cvm1, p_cvm2, p_cvm3, p_cvm4), print = TRUE, ncol = 4, nrow = 2)
 

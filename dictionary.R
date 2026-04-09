@@ -1,0 +1,14 @@
+# RIDAGEYR = age
+# RIAGENDR = sex
+# RIDRETH1 = race
+# DMDEDUC2 = education
+# DMDMARTL = status_love
+# INDFMPIR = cost
+# BMXBMI = BMI
+# BMXWAIST = Chu vi vong eo
+# LBXTC = Total Cholesterol
+# LBXTR = Triglycerid (mg/dl)
+# LBDHDD = HDL-C (mg/dl)
+# LBXSGL = Glucose huyet tuong (mg/dl)
+# LBXSATSI = ALT (U/L)
+# LBXASSI = AST (U/L)
