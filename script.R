@@ -134,7 +134,7 @@ tab1_gt <- masld_design %>%
 tab1_gt
 
 # ==============================================================================
-# BƯỚC 4: CHẠY MÔ HÌNH COX VÀ RÚT ĐIỂM DỰ BÁO (LINEAR PREDICTOR)
+# BƯỚC 4: CHẠY MÔ HÌNH COX VÀ RÚT ĐIỂM DỰ BÁO 
 # ==============================================================================
 cat("\n--- BƯỚC 4: RÚT ĐIỂM DỰ BÁO ---\n")
 
@@ -239,17 +239,29 @@ create_km <- function(group_var, event_var, model_name) {
   return(p)
 }
 
-p_acm1 <- create_km("Q_acm_m1", "status_acm", "TyHGB")
-p_acm2 <- create_km("Q_acm_m2", "status_acm", "TyHGB_ABSI")
-p_acm3 <- create_km("Q_acm_m3", "status_acm", "TyHGB_WWI")
-p_acm4 <- create_km("Q_acm_m4", "status_acm", "TyHGB_WHtR")
+combine_km <- function(km_obj) {
+  # Ẩn chữ trục Y của bảng risk table cho sạch
+  km_obj$table <- km_obj$table + theme(axis.title.y = element_blank())
+  
+  # Ghép plot và table theo tỷ lệ 3:1 chiều cao
+  (km_obj$plot / km_obj$table) + plot_layout(heights = c(3, 1))
+}
 
-p_cvm1 <- create_km("Q_cvm_m1", "status_cvm", "TyHGB")
-p_cvm2 <- create_km("Q_cvm_m2", "status_cvm", "TyHGB_ABSI")
-p_cvm3 <- create_km("Q_cvm_m3", "status_cvm", "TyHGB_WWI")
-p_cvm4 <- create_km("Q_cvm_m4", "status_cvm", "TyHGB_WHtR")
+pw_acm1 <- combine_km(create_km("Q_acm_m1", "status_acm", "TyHGB"))
+pw_acm2 <- combine_km(create_km("Q_acm_m2", "status_acm", "TyHGB_ABSI"))
+pw_acm3 <- combine_km(create_km("Q_acm_m3", "status_acm", "TyHGB_WWI"))
+pw_acm4 <- combine_km(create_km("Q_acm_m4", "status_acm", "TyHGB_WHtR"))
 
-arrange_ggsurvplots(list(p_acm1, p_acm2, p_acm3, p_acm4, p_cvm1, p_cvm2, p_cvm3, p_cvm4), print = TRUE, ncol = 4, nrow = 2)
+pw_cvm1 <- combine_km(create_km("Q_cvm_m1", "status_cvm", "TyHGB"))
+pw_cvm2 <- combine_km(create_km("Q_cvm_m2", "status_cvm", "TyHGB_ABSI"))
+pw_cvm3 <- combine_km(create_km("Q_cvm_m3", "status_cvm", "TyHGB_WWI"))
+pw_cvm4 <- combine_km(create_km("Q_cvm_m4", "status_cvm", "TyHGB_WHtR"))
+
+final_plot <- (pw_acm1 | pw_acm2 | pw_acm3 | pw_acm4) / 
+  (pw_cvm1 | pw_cvm2 | pw_cvm3 | pw_cvm4)
+
+# Lưu bằng ggsave
+ggsave("Figure_KM_Patchwork.png", plot = final_plot, width = 18, height = 10, dpi = 300, bg = "white")
 
 # ==============================================================================
 # BƯỚC 6: VẼ ĐƯỜNG CONG ROC GHÉP KHỐI (2 HÀNG x 3 CỘT)
@@ -269,33 +281,53 @@ roc_c3 <- timeROC(T=df_final$time_months, delta=df_final$event_cr, marker=df_fin
 roc_c4 <- timeROC(T=df_final$time_months, delta=df_final$event_cr, marker=df_final$lp_cvm_m4, cause=1, weighting="marginal", times=c(36,60,120))
 
 plot_roc <- function(r1, r2, r3, r4, time_idx, title) {
+  get_roc_data <- function(roc_obj) {
+    if (!is.null(roc_obj$AUC)) {
+      return(list(AUC = roc_obj$AUC, FP = roc_obj$FP, TP = roc_obj$TP)) 
+    } else {
+      return(list(AUC = roc_obj$AUC_1, FP = roc_obj$FP_1, TP = roc_obj$TP_1)) 
+    }
+  }
+  
+  d1 <- get_roc_data(r1); d2 <- get_roc_data(r2); d3 <- get_roc_data(r3); d4 <- get_roc_data(r4)
+  
   df_roc <- data.frame(
-    FPR = c(r1$FP[,time_idx], r2$FP[,time_idx], r3$FP[,time_idx], r4$FP[,time_idx]),
-    TPR = c(r1$TP[,time_idx], r2$TP[,time_idx], r3$TP[,time_idx], r4$TP[,time_idx]),
-    Model = c(rep(paste0("TyHGB (AUC=", round(r1$AUC[time_idx], 3), ")"), length(r1$FP[,time_idx])),
-              rep(paste0("TyHGB+ABSI (AUC=", round(r2$AUC[time_idx], 3), ")"), length(r2$FP[,time_idx])),
-              rep(paste0("TyHGB+WWI (AUC=", round(r3$AUC[time_idx], 3), ")"), length(r3$FP[,time_idx])),
-              rep(paste0("TyHGB+WHtR (AUC=", round(r4$AUC[time_idx], 3), ")"), length(r4$FP[,time_idx])))
+    FPR = c(d1$FP[,time_idx], d2$FP[,time_idx], d3$FP[,time_idx], d4$FP[,time_idx]),
+    TPR = c(d1$TP[,time_idx], d2$TP[,time_idx], d3$TP[,time_idx], d4$TP[,time_idx]),
+    Model = c(rep(paste0("TyHGB (AUC=", round(d1$AUC[time_idx], 3), ")"), length(d1$FP[,time_idx])),
+              rep(paste0("TyHGB+ABSI (AUC=", round(d2$AUC[time_idx], 3), ")"), length(d2$FP[,time_idx])),
+              rep(paste0("TyHGB+WWI (AUC=", round(d3$AUC[time_idx], 3), ")"), length(d3$FP[,time_idx])),
+              rep(paste0("TyHGB+WHtR (AUC=", round(d4$AUC[time_idx], 3), ")"), length(d4$FP[,time_idx])))
   )
+  
   ggplot(df_roc, aes(x = FPR, y = TPR, color = Model)) +
-    geom_line(linewidth = 0.8) + geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
+    geom_line(linewidth = 1) +
+    geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "gray50") +
     scale_color_nejm() + theme_bw() +
-    theme(legend.position = c(0.65, 0.2), legend.title = element_blank(),
-          legend.background = element_rect(fill = alpha("white", 0.5), color = NA),
-          legend.text = element_text(size = 8), title = element_text(size = 11, face = "bold")) +
+    theme(legend.position = c(0.65, 0.22), 
+          legend.title = element_blank(),
+          legend.background = element_rect(fill = alpha("white", 0.7), color = "black"),
+          legend.text = element_text(size = 9, face = "bold"), 
+          title = element_text(size = 12, face = "bold")) +
     labs(title = title, x = "1 - Specificity", y = "Sensitivity")
 }
 
-p_roc_a1 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 1, "ACM - 3 Years")
-p_roc_a2 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 2, "ACM - 5 Years")
-p_roc_a3 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 3, "ACM - 10 Years")
+hide_x <- theme(axis.title.x = element_blank(), axis.text.x = element_blank(), axis.ticks.x = element_blank())
+hide_y <- theme(axis.title.y = element_blank(), axis.text.y = element_blank(), axis.ticks.y = element_blank())
+
+p_roc_a1 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 1, "ACM - 3 Years") + hide_x
+p_roc_a2 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 2, "ACM - 5 Years") + hide_x + hide_y
+p_roc_a3 <- plot_roc(roc_a1, roc_a2, roc_a3, roc_a4, 3, "ACM - 10 Years") + hide_x + hide_y
 
 p_roc_c1 <- plot_roc(roc_c1, roc_c2, roc_c3, roc_c4, 1, "CVM - 3 Years")
-p_roc_c2 <- plot_roc(roc_c1, roc_c2, roc_c3, roc_c4, 2, "CVM - 5 Years")
-p_roc_c3 <- plot_roc(roc_c1, roc_c2, roc_c3, roc_c4, 3, "CVM - 10 Years")
+p_roc_c2 <- plot_roc(roc_c1, roc_c2, roc_c3, roc_c4, 2, "CVM - 5 Years") + hide_y
+p_roc_c3 <- plot_roc(roc_c1, roc_c2, roc_c3, roc_c4, 3, "CVM - 10 Years") + hide_y
 
-final_roc_plot <- (p_roc_a1 | p_roc_a2 | p_roc_a3) / (p_roc_c1 | p_roc_c2 | p_roc_c3)
-print(final_roc_plot)
+final_roc_plot <- (p_roc_a1 | p_roc_a2 | p_roc_a3) / 
+  (p_roc_c1 | p_roc_c2 | p_roc_c3)
+
+ggsave("ROC_Grid_Publication.png", plot = final_roc_plot, 
+       width = 10, height = 7, units = "in", dpi = 300, bg = "white")
 
 # ==============================================================================
 # BƯỚC 7, 8, 9 (GIỮ NGUYÊN NHƯ FILE TRƯỚC LÀ CHẠY ĐƯỢC 100%)
