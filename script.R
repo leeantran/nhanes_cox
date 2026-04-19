@@ -111,27 +111,194 @@ df_final <- df_final %>% mutate(across(all_of(cat_vars_final), as.factor))
 masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
 
 # ==============================================================================
-# BƯỚC 3: THỐNG KÊ MÔ TẢ (TABLE 1)
+# BƯỚC 3: THỐNG KÊ MÔ TẢ (TABLE 1) - FULL LABEL CHUẨN TỪ ĐIỂN NHANES
 # ==============================================================================
-cat("\n--- BƯỚC 3: XUẤT TABLE 1 BẰNG GTSUMMARY ---\n")
 
+# 1. Danh sách biến đầy đủ
 vars_table1 <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "DMDEDUC2", "DMDMARTL", "INDFMPIR",
                  "BMXBMI", "BMXWAIST", "TyHGB", "ABSI", "WWI", "WHtR", 
                  "LBXTC", "LBXTR", "LBDHDD", "LBDSGLSI", "LBXSATSI", "LBXSASSI",
+                 "LBXWBCSI", "LBXLYPCT", "LBXMOPCT", "LBXNEPCT", "LBXEOPCT", "LBXBAPCT",
+                 "LBDLYMNO", "LBDMONO", "LBDNENO", "LBDEONO", "LBDBANO",
+                 "LBXRBCSI", "LBXHGB", "LBXHCT",
                  "diabetes", "hyperten", "cvd_hx", "status_acm_factor", "status_cvm_factor")
 
+# 2. Xuất bảng với Label "căng đét"
 tab1_gt <- masld_design %>%
   tbl_svysummary(
     by = TyHGB_Q, 
     include = all_of(vars_table1),
-    statistic = list(all_continuous() ~ "{mean} ({sd})", all_categorical() ~ "{n_unweighted} ({p}%)"),
-    digits = list(all_continuous() ~ 2, all_categorical() ~ c(0, 1)), missing = "no"
+    statistic = list(
+      all_continuous() ~ "{mean} ({sd})", 
+      all_categorical() ~ "{n_unweighted} ({p}%)"
+    ),
+    digits = list(
+      all_continuous() ~ 2, 
+      all_categorical() ~ c(0, 1)
+    ), 
+    missing = "no",
+    
+    # ---------- BỘ TỪ ĐIỂN LABEL CHUẨN NHANES ----------
+    label = list(
+      # Nhóm Nhân trắc học & Xã hội
+      RIDAGEYR ~ "Age (years)",
+      RIAGENDR ~ "Gender",
+      RIDRETH1 ~ "Race/Ethnicity",
+      DMDEDUC2 ~ "Education level",
+      DMDMARTL ~ "Marital status",
+      INDFMPIR ~ "Ratio of family income to poverty (PIR)",
+      
+      # Nhóm Chỉ số béo phì & Chuyển hóa
+      BMXBMI   ~ "Body mass index (kg/m²)",
+      BMXWAIST ~ "Waist circumference (cm)",
+      TyHGB    ~ "TyHGB Index",
+      ABSI     ~ "A Body Shape Index (ABSI)",
+      WWI      ~ "Weight-Adjusted Waist Index (WWI)",
+      WHtR     ~ "Waist-to-Height Ratio (WHtR)",
+      
+      # Nhóm Sinh hóa & Gan máu (Lưu ý đuôi SI là đơn vị chuẩn quốc tế)
+      LBXTC    ~ "Total cholesterol (mg/dL)",
+      LBXTR    ~ "Triglycerides (mg/dL)",
+      LBDHDD   ~ "HDL-cholesterol (mg/dL)",
+      LBDSGLSI ~ "Fasting glucose (mmol/L)",
+      LBXSATSI ~ "Alanine aminotransferase (ALT, U/L)",
+      LBXSASSI ~ "Aspartate aminotransferase (AST, U/L)",
+      
+      # Nhóm Cận lâm sàng Huyết học (Tế bào máu CBC)
+      LBXWBCSI ~ "White blood cell count (1000 cells/μL)",
+      LBXLYPCT ~ "Lymphocytes (%)",
+      LBXMOPCT ~ "Monocytes (%)",
+      LBXNEPCT ~ "Segmented neutrophils (%)",
+      LBXEOPCT ~ "Eosinophils (%)",
+      LBXBAPCT ~ "Basophils (%)",
+      LBDLYMNO ~ "Lymphocytes number (1000 cells/μL)",
+      LBDMONO  ~ "Monocytes number (1000 cells/μL)",
+      LBDNENO  ~ "Segmented neutrophils number (1000 cells/μL)",
+      LBDEONO  ~ "Eosinophils number (1000 cells/μL)",
+      LBDBANO  ~ "Basophils number (1000 cells/μL)",
+      LBXRBCSI ~ "Red blood cell count (million cells/μL)",
+      LBXHGB   ~ "Hemoglobin (g/dL)",
+      LBXHCT   ~ "Hematocrit (%)",
+      
+      # Nhóm Bệnh nền & Kết cục
+      diabetes ~ "Type 2 Diabetes",
+      hyperten ~ "Hypertension",
+      cvd_hx   ~ "History of cardiovascular disease",
+      status_acm_factor ~ "All-cause mortality (ACM)",
+      status_cvm_factor ~ "Cardiovascular mortality (CVM)"
+    )
+    # ---------------------------------------------------
   ) %>%
-  add_p() %>% add_overall() %>%
-  modify_header(stat_0 = "**Overall**\n(N = {N_unweighted})", all_stat_cols() ~ "**{level}**\n(N = {n_unweighted})") %>%
-  bold_labels() 
+  add_p() %>% 
+  add_overall() %>%
+  modify_header(
+    stat_0 = "**Overall**\n(N = {N_unweighted})", 
+    all_stat_cols() ~ "**{level}**\n(N = {n_unweighted})"
+  ) %>%
+  bold_labels()
 
+# 3. Hiển thị Table 1
 tab1_gt
+
+# ==============================================================================
+# BƯỚC 3.4: CHUẨN HÓA Z-SCORE CHO 4 CHỈ SỐ ĐỂ SO SÁNH CÔNG BẰNG
+# ==============================================================================
+
+# 1. Ép 4 chỉ số về chuẩn Z-score (Mean = 0, SD = 1)
+df_final <- df_final %>%
+  mutate(
+    TyHGB_Z = as.numeric(scale(TyHGB)),
+    ABSI_Z  = as.numeric(scale(ABSI)),
+    WWI_Z   = as.numeric(scale(WWI)),
+    WHtR_Z  = as.numeric(scale(WHtR))
+  )
+
+# 2. Cập nhật lại design với data mới
+masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
+
+# ==============================================================================
+# BƯỚC 3.5: PHÂN TÍCH COX ĐỘC LẬP TỪNG BIẾN (DÙNG BIẾN ĐÃ CHUẨN HÓA _Z)
+# ==============================================================================
+
+# 1. ĐỔI TÊN markers SANG CÁC BIẾN "_Z" VỪA TẠO
+markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
+
+# Biến hiệu chỉnh (giữ nguyên)
+adj_vars <- "RIDAGEYR + LBXSATSI"
+
+# 2. HÀM CHẠY VÀ RÚT KẾT QUẢ
+get_independent_res <- function(outcome, marker) {
+  
+  # A. Univariate
+  form_uni <- paste0("Surv(time_months, ", outcome, ") ~ ", marker)
+  fit_uni <- suppressWarnings(svycoxph(as.formula(form_uni), design = masld_design))
+  res_uni <- tidy(fit_uni, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
+  
+  hr_uni <- sprintf("%.3f (%.3f-%.3f)", res_uni$estimate, res_uni$conf.low, res_uni$conf.high)
+  p_uni <- ifelse(res_uni$p.value < 0.001, "<0.001", sprintf("%.3f", res_uni$p.value))
+  
+  # B. Multivariate
+  form_multi <- paste0("Surv(time_months, ", outcome, ") ~ ", marker, " + ", adj_vars)
+  fit_multi <- suppressWarnings(svycoxph(as.formula(form_multi), design = masld_design))
+  res_multi <- tidy(fit_multi, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
+  
+  hr_multi <- sprintf("%.3f (%.3f-%.3f)", res_multi$estimate, res_multi$conf.low, res_multi$conf.high)
+  p_multi <- ifelse(res_multi$p.value < 0.001, "<0.001", sprintf("%.3f", res_multi$p.value))
+  
+  return(c(hr_uni, p_uni, hr_multi, p_multi))
+}
+
+# 3. LẶP VÀ XÂY DỰNG DATA.FRAME
+results_list <- list()
+
+for (outcome in c("status_acm", "status_cvm")) {
+  outcome_label <- ifelse(outcome == "status_acm", "All-cause mortality", "Cardiovascular mortality")
+  
+  for (marker in markers) {
+    res <- get_independent_res(outcome, marker)
+    
+    # Bỏ chữ "_Z" đi khi in ra bảng để nhìn cho đẹp, giữ nguyên tên gốc
+    clean_marker_name <- gsub("_Z", "", marker)
+    
+    results_list[[length(results_list) + 1]] <- data.frame(
+      Outcome = outcome_label,
+      Marker = clean_marker_name,
+      Uni_HR = res[1],
+      Uni_P = res[2],
+      Multi_HR = res[3],
+      Multi_P = res[4],
+      stringsAsFactors = FALSE
+    )
+  }
+}
+
+df_cox_independent <- bind_rows(results_list)
+
+# 4. VẼ BẢNG BẰNG 'gt'
+table_cox_new <- df_cox_independent %>%
+  group_by(Outcome) %>%
+  gt() %>%
+  tab_spanner(label = md("**Univariate analysis (per 1-SD increase)**"), columns = c(Uni_HR, Uni_P)) %>%
+  tab_spanner(label = md("**Multivariate Analysis (per 1-SD increase)**"), columns = c(Multi_HR, Multi_P)) %>%
+  cols_label(
+    Marker = "",
+    Uni_HR = md("**HR (95% CIs)**"),
+    Uni_P = md("**p-value**"),
+    Multi_HR = md("**HR (95% CIs)**"),
+    Multi_P = md("**p-value**")
+  ) %>%
+  tab_options(
+    row_group.font.weight = "bold",
+    row_group.background.color = "#E8E8E8",
+    column_labels.font.weight = "bold",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black",
+    table_body.border.bottom.color = "black"
+  ) %>%
+  cols_align(align = "left", columns = everything())
+
+# 5. HIỂN THỊ
+table_cox_new
 
 # ==============================================================================
 # BƯỚC 4: CHẠY MÔ HÌNH COX VÀ RÚT ĐIỂM DỰ BÁO 
@@ -774,4 +941,91 @@ final_forest <- final_forest +
 ggsave("Figure_Subgroup_Analysis.png", plot = final_forest, 
        width = 22, height = 12, units = "in", dpi = 300, bg = "white")
 
-cat("\nĐã xuất xong tuyệt tác 'Figure_Subgroup_Analysis.png'! Sếp mở lên nghiệm thu nhé.\n")
+
+# ==============================================================================
+# BƯỚC 10: PHÂN TÍCH TRUNG GIAN (MEDIATION ANALYSIS) VỚI ACID URIC (LBXSUA)
+# ==============================================================================
+
+# 1. LÀM SẠCH DỮ LIỆU (Xử lý missing cho LBXSUA)
+df_med_clean <- df_final %>% filter(!is.na(LBXSUA))
+
+mediator_var <- "LBXSUA"
+# Danh sách biến hiệu chỉnh đầy đủ để tránh nhiễu (Confounding)
+med_covs <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "INDFMPIR", "DMDEDUC2", "DMDMARTL", "diabetes")
+med_covs_str <- paste(med_covs, collapse = " + ")
+
+med_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_med_clean)
+
+# 2. HÀM TÍNH TOÁN VÀ VẼ SƠ ĐỒ
+draw_mediation_plot <- function(event_var, title_str) {
+  
+  # Path A: TyHGB -> Acid Uric (Hiệu chỉnh nhiễu)
+  form_path_a <- as.formula(paste(mediator_var, "~ TyHGB +", med_covs_str))
+  fit_path_a <- svyglm(form_path_a, design = med_design, family = gaussian())
+  sm_a <- summary(fit_path_a)
+  beta_a <- coef(fit_path_a)["TyHGB"]
+  se_a <- sm_a$coefficients["TyHGB", "Std. Error"]
+  p_a <- sm_a$coefficients["TyHGB", "Pr(>|t|)"]
+  
+  # Total Effect: TyHGB -> Tử vong (Hiệu chỉnh nhiễu)
+  form_tot <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", med_covs_str))
+  fit_tot <- svycoxph(form_tot, design = med_design)
+  sm_tot <- summary(fit_tot)
+  beta_tot <- coef(fit_tot)["TyHGB"]
+  p_tot <- sm_tot$coefficients["TyHGB", "Pr(>|z|)"]
+  
+  # Direct Effect & Path B: TyHGB + Acid Uric -> Tử vong (Hiệu chỉnh nhiễu)
+  form_dir <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", mediator_var, "+", med_covs_str))
+  fit_dir <- svycoxph(form_dir, design = med_design)
+  sm_dir <- summary(fit_dir)
+  beta_dir <- coef(fit_dir)["TyHGB"]
+  p_dir <- sm_dir$coefficients["TyHGB", "Pr(>|z|)"]
+  
+  med_row <- grep(paste0("^", mediator_var), rownames(sm_dir$conf.int), value = TRUE)[1]
+  hr_b <- sm_dir$conf.int[med_row, "exp(coef)"]
+  p_b <- sm_dir$coefficients[med_row, "Pr(>|z|)"]
+  
+  # Tính % Trung gian (Proportion Mediated)
+  prop_med <- (beta_tot - beta_dir) / beta_tot * 100
+  if(is.na(prop_med) || prop_med < 0) prop_med <- 0 
+  
+  # --- Format Text để vẽ hình ---
+  fmt_p <- function(p) ifelse(!is.na(p) & p < 0.001, "P<0.001", sprintf("P=%.3f", p))
+  str_tot <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", sm_tot$conf.int["TyHGB", 1], sm_tot$conf.int["TyHGB", 3], sm_tot$conf.int["TyHGB", 4], fmt_p(p_tot))
+  str_dir <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", sm_dir$conf.int["TyHGB", 1], sm_dir$conf.int["TyHGB", 3], sm_dir$conf.int["TyHGB", 4], fmt_p(p_dir))
+  str_a <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", beta_a, beta_a-1.96*se_a, beta_a+1.96*se_a, fmt_p(p_a))
+  str_b <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", hr_b, sm_dir$conf.int[med_row, 3], sm_dir$conf.int[med_row, 4], fmt_p(p_b))
+  str_prop <- sprintf("%.2f%%", prop_med)
+  
+  # [Phần code vẽ ggplot2 giữ nguyên như Step trước, chỉ đổi label mediator thành "Acid Uric"]
+  boxes <- data.frame(x = c(1.5, 8.5, 1.5, 8.5, 5), y = c(6, 6, 1, 1, 4),
+                      label = c("TyHGB", title_str, "TyHGB", title_str, "Acid Uric"))
+  
+  p <- ggplot() + theme_void() + coord_cartesian(xlim = c(0, 10), ylim = c(0, 7)) +
+    geom_segment(aes(x = 2.5, y = 6, xend = 7.5, yend = 6), arrow = arrow(length = unit(0.3, "cm")), color = "#2CA02C", linewidth = 1) + 
+    geom_segment(aes(x = 2.5, y = 1, xend = 7.5, yend = 1), arrow = arrow(length = unit(0.3, "cm")), color = "#2CA02C", linewidth = 1) + 
+    geom_segment(aes(x = 2.2, y = 1.5, xend = 4.2, yend = 3.5), arrow = arrow(length = unit(0.3, "cm")), color = "#2CA02C", linewidth = 1) + 
+    geom_segment(aes(x = 5.8, y = 3.5, xend = 7.8, yend = 1.5), arrow = arrow(length = unit(0.3, "cm")), color = "#2CA02C", linewidth = 1) + 
+    geom_rect(data = boxes, aes(xmin = x - 1, xmax = x + 1, ymin = y - 0.4, ymax = y + 0.4), fill = "#E8F4F0", color = "#4DBBD5", linewidth = 1, rx = 0.2, ry = 0.2) +
+    geom_text(data = boxes, aes(x = x, y = y, label = label), size = 5, fontface = "bold") +
+    geom_text(aes(x = 5, y = 6.3, label = "Total effect"), fontface = "bold", size = 4) +
+    geom_text(aes(x = 5, y = 5.7, label = str_tot), fontface = "bold", size = 3.8) +
+    geom_text(aes(x = 5, y = 1.3, label = "Direct effect"), fontface = "bold", size = 4) +
+    geom_text(aes(x = 5, y = 0.7, label = str_dir), fontface = "bold", size = 3.8) +
+    geom_text(aes(x = 5, y = 2.5, label = "Proportion mediated"), fontface = "bold", size = 4.5) +
+    geom_text(aes(x = 5, y = 2.1, label = str_prop), fontface = "bold", size = 5) +
+    geom_text(aes(x = 2.7, y = 2.8, label = str_a), fontface = "bold", size = 3.5, angle = 45) +
+    geom_text(aes(x = 7.3, y = 2.8, label = str_b), fontface = "bold", size = 3.5, angle = -45)
+  
+  return(p)
+}
+
+p_med_acm <- draw_mediation_plot("status_acm", "All-cause\nmortality")
+p_med_cvm <- draw_mediation_plot("status_cvm", "Cardiovascular\nmortality")
+
+final_mediation <- (p_med_acm | p_med_cvm) + plot_annotation(tag_levels = 'A',           # Đánh dấu bằng chữ cái in hoa (A, B, C...)
+                                                             tag_prefix = '(',           # Thêm dấu ngoặc mở
+                                                             tag_suffix = ')') +
+  theme(plot.tag = element_text(size = 22, face = "bold"))
+ggsave("Figure_Mediation_UricAcid.png", plot = final_mediation, width = 18, height = 8, dpi = 300)
+
