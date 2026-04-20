@@ -486,53 +486,111 @@ final_roc_plot
 #| label: tbl-incremental
 #| tbl-cap: "Table 3: Incremental predictive value of adding indices to the base model"
 
-df_perf <- data.frame(
-  Outcome = c(
-    rep("All-cause mortality (ACM) at 10 Years\nBase TyHGB C-index: 0.838 (0.811-0.865)", 3),
-    rep("Cardiovascular mortality (CVM) at 10 Years\nBase TyHGB C-index: 0.874 (0.840-0.908)", 3)
-  ),
-  Model = c("TyHGB + ABSI", "TyHGB + WWI", "TyHGB + WHtR", 
-            "TyHGB + ABSI", "TyHGB + WWI", "TyHGB + WHtR"),
-  C_index = c("0.841 (0.814-0.867)", "0.841 (0.814-0.868)", "0.840 (0.813-0.867)",
-              "0.877 (0.846-0.909)", "0.879 (0.848-0.910)", "0.876 (0.843-0.908)"),
-  P_DeLong = c("0.902", "0.885", "0.938", 
-               "0.875", "0.830", "0.933"),
-  NRI = c("0.003 (0.001-0.009)", "0.005 (0.001-0.010)", "0.001 (-0.002-0.004)",
-          "0.001 (-0.002-0.002)", "0.001 (-0.001-0.006)", "0.001 (-0.002-0.002)"),
-  P_NRI = c("<0.001", "0.020", "0.257", 
-            "0.297", "0.119", "0.594"),
-  IDI = c("0.009 (0.004-0.017)", "0.011 (0.004-0.019)", "0.007 (0.003-0.014)",
-          "0.004 (-0.001-0.013)", "0.005 (-0.003-0.017)", "0.002 (-0.004-0.009)"),
-  P_IDI = c("<0.001", "<0.001", "<0.001", 
-            "0.277", "0.158", "0.396"),
-  stringsAsFactors = FALSE
+get_c_ci <- function(time_var, event_var, lp_var, weights_var) {
+  c_obj <- concordance(Surv(time_var, event_var) ~ lp_var, weights = weights_var)
+  c_val <- ifelse(c_obj$concordance < 0.5, 1 - c_obj$concordance, c_obj$concordance)
+  se <- sqrt(c_obj$var)
+  lower <- c_val - 1.96 * se
+  upper <- c_val + 1.96 * se
+  return(list(c_str = paste0(sprintf("%.3f", c_val), " (", sprintf("%.3f", lower), "-", sprintf("%.3f", upper), ")"), 
+              c_val = c_val, se = se))
+}
+
+compare_models <- function(time_var, event_var, event_cr_var, lp_base, lp_new, weights_var, t0, is_cvm) {
+  
+  base_c <- get_c_ci(time_var, event_var, lp_base, weights_var)
+  new_c  <- get_c_ci(time_var, event_var, lp_new, weights_var)
+  
+  if(is_cvm) { 
+    roc_base <- timeROC(T=time_var, delta=event_cr_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+    roc_new  <- timeROC(T=time_var, delta=event_cr_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+  } else {
+    roc_base <- timeROC(T=time_var, delta=event_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+    roc_new  <- timeROC(T=time_var, delta=event_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+  }
+  
+  comp_res <- compare(roc_new, roc_base, adjusted=FALSE)
+  p_delong <- if(!is.null(comp_res$p_values_AUC)) comp_res$p_values_AUC[1] else comp_res$p_values_AUC_1[1]
+  
+  if(is.na(p_delong)) {
+    se_diff <- sqrt(base_c$se^2 + new_c$se^2)
+    if (se_diff == 0) se_diff <- 1e-6 
+    z_stat <- abs(new_c$c_val - base_c$c_val) / se_diff
+    p_delong <- 2 * (1 - pnorm(z_stat))
+  }
+  
+  indata_df <- data.frame(time = time_var, status = event_var)
+  
+  set.seed(123)
+  idi_res <- IDI.INF(indata_df, covs0 = as.matrix(lp_base), covs1 = as.matrix(lp_new), t0 = t0, npert = 100) 
+  out_matrix <- IDI.INF.OUT(idi_res)
+  
+  idi_str <- paste0(sprintf("%.3f", out_matrix[1, 1]), " (", sprintf("%.3f", out_matrix[1, 2]), "-", sprintf("%.3f", out_matrix[1, 3]), ")")
+  idi_p   <- out_matrix[1, 4]
+  
+  nri_str <- paste0(sprintf("%.3f", out_matrix[3, 1]), " (", sprintf("%.3f", out_matrix[3, 2]), "-", sprintf("%.3f", out_matrix[3, 3]), ")")
+  nri_p   <- out_matrix[3, 4]
+  
+  return(list(c_new = new_c$c_str, p_delong = p_delong, nri = nri_str, p_nri = nri_p, idi = idi_str, p_idi = idi_p))
+}
+
+run_all_comparisons <- function(time_var, event_var, event_cr_var, lp_m1, lp_m2, lp_m3, lp_m4, weights_var, t0 = 120, is_cvm = FALSE, outcome_name) {
+  cat(paste("\n================ KẾT QUẢ CHO:", outcome_name, "================\n"))
+  
+  c_base_str <- get_c_ci(time_var, event_var, lp_m1, weights_var)$c_str
+  cat(sprintf("Mô hình gốc (TyHGB) - C-index: %s\n\n", c_base_str))
+  
+  cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+              "Model so sánh", "C-index New (95%CI)", "P DeLong", "Cont. NRI (95%CI)", "P (NRI)", "IDI (95%CI)", "P (IDI)"))
+  cat(strrep("-", 108), "\n")
+  
+  models <- list(
+    list(name = "TyHGB+ABSI", lp = lp_m2),
+    list(name = "TyHGB+WWI",  lp = lp_m3),
+    list(name = "TyHGB+WHtR", lp = lp_m4)
+  )
+  
+  for (m in models) {
+    res <- compare_models(time_var, event_var, event_cr_var, lp_m1, m$lp, weights_var, t0, is_cvm)
+    p_dl_print <- ifelse(res$p_delong < 0.001, "<0.001", sprintf("%.4f", res$p_delong))
+    p_nri_print <- ifelse(res$p_nri < 0.001, "<0.001", sprintf("%.4f", res$p_nri))
+    p_idi_print <- ifelse(res$p_idi < 0.001, "<0.001", sprintf("%.4f", res$p_idi))
+    
+    cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+                m$name, res$c_new, p_dl_print, res$nri, p_nri_print, res$idi, p_idi_print))
+  }
+  cat("\n")
+}
+
+cat("Đang xử lý Bootstrap 100 vòng. Sẽ mất vài phút...\n")
+
+run_all_comparisons(
+  time_var     = df_final$time_months, 
+  event_var    = df_final$status_acm, 
+  event_cr_var = df_final$status_acm,     
+  lp_m1        = df_final$lp_acm_m1,      
+  lp_m2        = df_final$lp_acm_m2, 
+  lp_m3        = df_final$lp_acm_m3, 
+  lp_m4        = df_final$lp_acm_m4, 
+  weights_var  = df_final$WTSAF2YR,
+  t0           = 120, 
+  is_cvm       = FALSE, 
+  outcome_name = "ALL-CAUSE MORTALITY (ACM) TẠI 10 NĂM"
 )
 
-table_performance <- df_perf %>%
-  group_by(Outcome) %>%
-  gt() %>%
-  cols_label(
-    Model = "Comparison Model",
-    C_index = md("**C-index (95% CI)**"),
-    P_DeLong = md("**P-value (DeLong)**"),
-    NRI = md("**Continuous NRI (95% CI)**"),
-    P_NRI = md("**P-value (NRI)**"),
-    IDI = md("**IDI (95% CI)**"),
-    P_IDI = md("**P-value (IDI)**")
-  ) %>%
-  cols_align(align = "center", columns = c(C_index, P_DeLong, NRI, P_NRI, IDI, P_IDI)) %>%
-  cols_align(align = "left", columns = c(Model)) %>%
-  tab_options(
-    row_group.font.weight = "bold",
-    row_group.background.color = "#E8E8E8", 
-    column_labels.font.weight = "bold",
-    table.border.top.color = "black",
-    table.border.bottom.color = "black",
-    table_body.border.bottom.color = "black"
-  ) %>%
-  fmt_markdown(columns = everything())
-
-table_performance
+run_all_comparisons(
+  time_var     = df_final$time_months, 
+  event_var    = df_final$status_cvm, 
+  event_cr_var = df_final$event_cr,       
+  lp_m1        = df_final$lp_cvm_m1,      
+  lp_m2        = df_final$lp_cvm_m2, 
+  lp_m3        = df_final$lp_cvm_m3, 
+  lp_m4        = df_final$lp_cvm_m4, 
+  weights_var  = df_final$WTSAF2YR,
+  t0           = 120, 
+  is_cvm       = TRUE, 
+  outcome_name = "CARDIOVASCULAR MORTALITY (CVM) TẠI 10 NĂM"
+)
 ```
 
 ## 6. Dose-response relationship
