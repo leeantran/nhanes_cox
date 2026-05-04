@@ -120,7 +120,8 @@ vars_table1 <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "DMDEDUC2", "DMDMARTL", "IN
                  "LBXTC", "LBXTR", "LBDHDD", "LBDSGLSI", "LBXSATSI", "LBXSASSI",
                  "LBXWBCSI", "LBXLYPCT", "LBXMOPCT", "LBXNEPCT", "LBXEOPCT", "LBXBAPCT",
                  "LBDLYMNO", "LBDMONO", "LBDNENO", "LBDEONO", "LBDBANO",
-                 "LBXRBCSI", "LBXHGB", "LBXHCT",
+                 "LBXRBCSI", "LBXHGB", "LBXHCT", "LBXWBCSI", "LBDLYMNO", "LBDMONO", "LBDNENO",
+                 "LBDEONO", "LBDBANO", "LBXRBCSI", "LBXHGB", "LBXHCT",
                  "diabetes", "hyperten", "cvd_hx", "status_acm_factor", "status_cvm_factor")
 
 # 2. Xuất bảng với Label "căng đét"
@@ -143,15 +144,15 @@ tab1_gt <- masld_design %>%
       # Nhóm Nhân trắc học & Xã hội
       RIDAGEYR ~ "Age (years)",
       RIAGENDR ~ "Gender",
-      RIDRETH1 ~ "Race/Ethnicity",
+      RIDRETH1 ~ "Race",
       DMDEDUC2 ~ "Education level",
       DMDMARTL ~ "Marital status",
-      INDFMPIR ~ "Ratio of family income to poverty (PIR)",
+      INDFMPIR ~ "Family income to poverty",
       
       # Nhóm Chỉ số béo phì & Chuyển hóa
       BMXBMI   ~ "Body mass index (kg/m²)",
       BMXWAIST ~ "Waist circumference (cm)",
-      TyHGB    ~ "TyHGB Index",
+      TyHGB    ~ "TyHGB",
       ABSI     ~ "A Body Shape Index (ABSI)",
       WWI      ~ "Weight-Adjusted Waist Index (WWI)",
       WHtR     ~ "Waist-to-Height Ratio (WHtR)",
@@ -165,27 +166,22 @@ tab1_gt <- masld_design %>%
       LBXSASSI ~ "Aspartate aminotransferase (AST, U/L)",
       
       # Nhóm Cận lâm sàng Huyết học (Tế bào máu CBC)
-      LBXWBCSI ~ "White blood cell count (1000 cells/μL)",
-      LBXLYPCT ~ "Lymphocytes (%)",
-      LBXMOPCT ~ "Monocytes (%)",
-      LBXNEPCT ~ "Segmented neutrophils (%)",
-      LBXEOPCT ~ "Eosinophils (%)",
-      LBXBAPCT ~ "Basophils (%)",
-      LBDLYMNO ~ "Lymphocytes number (1000 cells/μL)",
-      LBDMONO  ~ "Monocytes number (1000 cells/μL)",
-      LBDNENO  ~ "Segmented neutrophils number (1000 cells/μL)",
-      LBDEONO  ~ "Eosinophils number (1000 cells/μL)",
-      LBDBANO  ~ "Basophils number (1000 cells/μL)",
-      LBXRBCSI ~ "Red blood cell count (million cells/μL)",
+      LBXWBCSI ~ "WBC (1000 cells/μL)",
+      LBDLYMNO ~ "Lymphocytes (1000 cells/μL)",
+      LBDMONO  ~ "Monocytes (1000 cells/μL)",
+      LBDNENO  ~ "Neutrophils (1000 cells/μL)",
+      LBDEONO  ~ "Eosinophils (1000 cells/μL)",
+      LBDBANO  ~ "Basophils (1000 cells/μL)",
+      LBXRBCSI ~ "RBC (million cells/μL)",
       LBXHGB   ~ "Hemoglobin (g/dL)",
       LBXHCT   ~ "Hematocrit (%)",
       
       # Nhóm Bệnh nền & Kết cục
-      diabetes ~ "Type 2 Diabetes",
+      diabetes ~ "Diabetes",
       hyperten ~ "Hypertension",
       cvd_hx   ~ "History of cardiovascular disease",
-      status_acm_factor ~ "All-cause mortality (ACM)",
-      status_cvm_factor ~ "Cardiovascular mortality (CVM)"
+      status_acm_factor ~ "All-cause mortality",
+      status_cvm_factor ~ "Cardiovascular mortality"
     )
     # ---------------------------------------------------
   ) %>%

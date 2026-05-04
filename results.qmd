@@ -16,7 +16,7 @@ execute:
 ```{r}
 pacman::p_load(readxl, survey, survival, gtsummary, survminer, splines, mice, timeROC, 
                dplyr, ggplot2, ggsci, rms, tidycmprsk, tidyr, survIDINRI, tableone,
-               patchwork, gt, forestploter)
+               patchwork, gt, forestploter, regplot)
 
 raw_df <- read_excel("data.xlsx", sheet = "RAW DATA")
 
@@ -970,5 +970,185 @@ final_mediation <- (p_med_acm | p_med_cvm) +
 
 final_mediation
 ```
+
+## 9. Competing Risk Analysis (Fine-Gray Model)
+
+```{r}
+#| label: tbl-finegray
+#| tbl-cap: "Table 4: Competing risk analysis (Fine-Gray model) for cardiovascular mortality"
+
+# 1. TẠO DATA SẠCH CHO FINE-GRAY (Tránh lỗi rớt data do NA ở các cột không liên quan)
+df_fg <- df_final[, c("time_months", "event_cr", "SDMVPSU", "SDMVSTRA", "WTSAF2YR", 
+                      "TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z", "RIDAGEYR", "LBXSATSI")]
+
+# Khai báo factor chuẩn cho package survival (0 = Censor, 1 = Sự kiện chính, 2 = Cạnh tranh)
+df_fg$event_cr_fg <- factor(df_fg$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
+
+# 2. XÂY DỰNG DATASET FINE-GRAY (Tạo thêm trọng số fgwt)
+fg_data <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_fg, etype = "CVM")
+
+# Cập nhật svydesign: Nhân trọng số khảo sát (WTSAF2YR) với trọng số Fine-Gray (fgwt)
+fg_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR * fgwt, nest = TRUE, data = fg_data)
+
+# 3. THIẾT LẬP VÒNG LẶP (Y HỆT BƯỚC 2)
+markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
+adj_vars <- "RIDAGEYR + LBXSATSI"
+
+get_fg_res <- function(marker) {
+  
+  # A. Đơn biến (Univariate Fine-Gray)
+  form_uni <- paste0("Surv(fgstart, fgstop, fgstatus) ~ ", marker)
+  fit_uni <- suppressWarnings(svycoxph(as.formula(form_uni), design = fg_design))
+  res_uni <- tidy(fit_uni, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
+  
+  sHR_uni <- sprintf("%.3f (%.3f-%.3f)", res_uni$estimate, res_uni$conf.low, res_uni$conf.high)
+  p_uni <- ifelse(res_uni$p.value < 0.001, "<0.001", sprintf("%.3f", res_uni$p.value))
+  
+  # B. Đa biến (Multivariate Fine-Gray)
+  form_multi <- paste0("Surv(fgstart, fgstop, fgstatus) ~ ", marker, " + ", adj_vars)
+  fit_multi <- suppressWarnings(svycoxph(as.formula(form_multi), design = fg_design))
+  res_multi <- tidy(fit_multi, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
+  
+  sHR_multi <- sprintf("%.3f (%.3f-%.3f)", res_multi$estimate, res_multi$conf.low, res_multi$conf.high)
+  p_multi <- ifelse(res_multi$p.value < 0.001, "<0.001", sprintf("%.3f", res_multi$p.value))
+  
+  return(c(sHR_uni, p_uni, sHR_multi, p_multi))
+}
+
+# 4. CHẠY LOOP VÀ GOM KẾT QUẢ VÀO DATA.FRAME
+results_fg <- list()
+
+for (marker in markers) {
+  res <- get_fg_res(marker)
+  
+  clean_marker_name <- gsub("_Z", "", marker) # Xóa đuôi _Z cho đẹp khi in ra bảng
+  
+  results_fg[[length(results_fg) + 1]] <- data.frame(
+    Marker = clean_marker_name,
+    Uni_sHR = res[1],
+    Uni_P = res[2],
+    Multi_sHR = res[3],
+    Multi_P = res[4],
+    stringsAsFactors = FALSE
+  )
+}
+
+df_fg_final <- bind_rows(results_fg)
+
+# 5. VẼ BẢNG MA TRẬN CHUẨN Q1 BẰNG 'gt'
+table_fg_gt <- df_fg_final %>%
+  gt() %>%
+  tab_spanner(label = md("**Univariate analysis (per 1-SD increase)**"), columns = c(Uni_sHR, Uni_P)) %>%
+  tab_spanner(label = md("**Multivariate Analysis (per 1-SD increase)**"), columns = c(Multi_sHR, Multi_P)) %>%
+  cols_label(
+    Marker = "",
+    Uni_sHR = md("**sHR (95% CIs)**"),
+    Uni_P = md("**p-value**"),
+    Multi_sHR = md("**sHR (95% CIs)**"),
+    Multi_P = md("**p-value**")
+  ) %>%
+  tab_options(
+    column_labels.font.weight = "bold",
+    table.border.top.color = "black",
+    table.border.bottom.color = "black",
+    table_body.border.bottom.color = "black"
+  ) %>%
+  cols_align(align = "left", columns = everything())
+
+# Hiển thị bảng
+table_fg_gt
+```
+
+## 10. Construction of Nomograms
+
+```{r}
+#| label: fig-nomogram
+#| fig-cap: "Figure 6: Nomograms predicting 3-, 5-, and 10-year survival probabilities for ACM (A) and CVM (B)"
+#| fig-width: 14
+#| fig-height: 12
+
+# ==============================================================================
+# BƯỚC 10: VẼ NOMOGRAM (Loại bỏ đa cộng tuyến & Tách riêng thang đo xác suất)
+# ==============================================================================
+library(rms)
+library(survival)
+library(dplyr)
+
+# 1. Khai báo 5 biến độc lập (ĐÃ BỎ Glucose, HDL, Triglyceride để chống Đa cộng tuyến)
+quant_vars <- c("TyHGB", "RIDAGEYR", "LBXWBCSI", "LBXSATSI", "LBXSASSI")
+
+sys_vars <- c("time_months", "status_acm", "status_cvm", "event_cr", "WTSAF2YR")
+
+# 2. CHỌN ĐÚNG CỘT RỒI MỚI XÓA NA
+df_nomo_rms <- df_final %>%
+  select(all_of(c(sys_vars, quant_vars))) %>% 
+  drop_na()
+
+# Đặt datadist
+dd <- datadist(df_nomo_rms)
+options(datadist = "dd")
+
+# ------------------------------------------------------------------------------
+# 3. XÂY DỰNG MÔ HÌNH VÀ VẼ CHO ACM
+# ------------------------------------------------------------------------------
+form_acm <- as.formula(paste("Surv(time_months, status_acm) ~", paste(quant_vars, collapse = " + ")))
+
+fit_acm_nomo <- cph(form_acm, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, weights = df_nomo_rms$WTSAF2YR)
+
+surv_acm <- Survival(fit_acm_nomo)
+surv3_acm <- function(lp) surv_acm(36, lp)
+surv5_acm <- function(lp) surv_acm(60, lp)
+surv10_acm <- function(lp) surv_acm(120, lp)
+
+# Thang đo ACM: Tử vong chung cao hơn, rải từ 0.95 xuống 0.5 (khoảng cách thưa ra)
+prob_scale_acm <- c(0.95, 0.90, 0.80, 0.70, 0.60, 0.50)
+
+nom_acm <- nomogram(fit_acm_nomo, 
+                    fun = list(surv3_acm, surv5_acm, surv10_acm),
+                    funlabel = c("3-Year ACM Survival", "5-Year ACM Survival", "10-Year ACM Survival"),
+                    fun.at = prob_scale_acm,
+                    lp = FALSE)
+
+# ------------------------------------------------------------------------------
+# 4. XÂY DỰNG MÔ HÌNH VÀ VẼ CHO CVM (FINE-GRAY)
+# ------------------------------------------------------------------------------
+df_nomo_rms$event_cr_fg <- factor(df_nomo_rms$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
+fg_data_nomo <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_nomo_rms, etype = "CVM")
+fg_data_nomo$final_wt <- fg_data_nomo$WTSAF2YR * fg_data_nomo$fgwt
+
+# Cập nhật datadist cho bộ data Fine-Gray
+dd_fg <- datadist(fg_data_nomo)
+options(datadist = "dd_fg")
+
+form_cvm <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", paste(quant_vars, collapse = " + ")))
+
+fit_cvm_nomo <- cph(form_cvm, data = fg_data_nomo, x = TRUE, y = TRUE, surv = TRUE, weights = fg_data_nomo$final_wt)
+
+surv_cvm <- Survival(fit_cvm_nomo)
+surv3_cvm <- function(lp) surv_cvm(36, lp)
+surv5_cvm <- function(lp) surv_cvm(60, lp)
+surv10_cvm <- function(lp) surv_cvm(120, lp)
+
+# Thang đo CVM: Tử vong tim mạch thấp hơn, bỏ 0.85 để chữ không cắn nhau
+prob_scale_cvm <- c(0.99, 0.95, 0.90, 0.80, 0.70)
+
+nom_cvm <- nomogram(fit_cvm_nomo, 
+                    fun = list(surv3_cvm, surv5_cvm, surv10_cvm),
+                    funlabel = c("3-Year CVM Survival", "5-Year CVM Survival", "10-Year CVM Survival"),
+                    fun.at = prob_scale_cvm,
+                    lp = FALSE)
+
+# ------------------------------------------------------------------------------
+# 5. GỘP BIỂU ĐỒ LÊN HÌNH
+# ------------------------------------------------------------------------------
+par(mfrow=c(2,1), mar=c(5, 4, 4, 2) + 0.1)
+
+plot(nom_acm, cex.axis=0.8, xfrac=0.45)
+title("A. Nomogram for All-Cause Mortality (ACM)", adj = 0, line = 1, cex.main=1.2)
+
+plot(nom_cvm, cex.axis=0.8, xfrac=0.45)
+title("B. Nomogram for Cardiovascular Mortality (CVM) - Fine-Gray Model", adj = 0, line = 1, cex.main=1.2)
+```
+
 
 
