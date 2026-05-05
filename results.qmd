@@ -11,12 +11,16 @@ execute:
   echo: false
   warning: false
   message: false
+knitr:
+  opts_chunk: 
+    fig.path: "Figures/"
+    dev: "jpeg"             
 ---
 
 ```{r}
 pacman::p_load(readxl, survey, survival, gtsummary, survminer, splines, mice, timeROC, 
                dplyr, ggplot2, ggsci, rms, tidycmprsk, tidyr, survIDINRI, tableone,
-               patchwork, gt, forestploter, regplot)
+               patchwork, gt, forestploter, regplot, dcurves)
 
 raw_df <- read_excel("data.xlsx", sheet = "RAW DATA")
 
@@ -215,7 +219,7 @@ masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR
 
 markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
 
-adj_vars <- "RIDAGEYR + LBXSATSI"
+adj_vars <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
 
 get_independent_res <- function(outcome, marker) {
   
@@ -293,7 +297,7 @@ table_cox_new
 #| fig-width: 18
 #| fig-height: 10
 
-covs_str <- "RIDAGEYR + RIAGENDR + RIDRETH1 + INDFMPIR + DMDEDUC2 + DMDMARTL + diabetes + hyperten + cvd_hx"
+covs_str <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
 
 cox_acm_m1 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB +", covs_str)), design = masld_design)
 cox_acm_m2 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB + ABSI +", covs_str)), design = masld_design)
@@ -483,114 +487,114 @@ final_roc_plot
 ## 5. Incremental predictive value
 
 ```{r}
-#| label: tbl-incremental
-#| tbl-cap: "Table 3: Incremental predictive value of adding indices to the base model"
-
-get_c_ci <- function(time_var, event_var, lp_var, weights_var) {
-  c_obj <- concordance(Surv(time_var, event_var) ~ lp_var, weights = weights_var)
-  c_val <- ifelse(c_obj$concordance < 0.5, 1 - c_obj$concordance, c_obj$concordance)
-  se <- sqrt(c_obj$var)
-  lower <- c_val - 1.96 * se
-  upper <- c_val + 1.96 * se
-  return(list(c_str = paste0(sprintf("%.3f", c_val), " (", sprintf("%.3f", lower), "-", sprintf("%.3f", upper), ")"), 
-              c_val = c_val, se = se))
-}
-
-compare_models <- function(time_var, event_var, event_cr_var, lp_base, lp_new, weights_var, t0, is_cvm) {
-  
-  base_c <- get_c_ci(time_var, event_var, lp_base, weights_var)
-  new_c  <- get_c_ci(time_var, event_var, lp_new, weights_var)
-  
-  if(is_cvm) { 
-    roc_base <- timeROC(T=time_var, delta=event_cr_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
-    roc_new  <- timeROC(T=time_var, delta=event_cr_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
-  } else {
-    roc_base <- timeROC(T=time_var, delta=event_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
-    roc_new  <- timeROC(T=time_var, delta=event_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
-  }
-  
-  comp_res <- compare(roc_new, roc_base, adjusted=FALSE)
-  p_delong <- if(!is.null(comp_res$p_values_AUC)) comp_res$p_values_AUC[1] else comp_res$p_values_AUC_1[1]
-  
-  if(is.na(p_delong)) {
-    se_diff <- sqrt(base_c$se^2 + new_c$se^2)
-    if (se_diff == 0) se_diff <- 1e-6 
-    z_stat <- abs(new_c$c_val - base_c$c_val) / se_diff
-    p_delong <- 2 * (1 - pnorm(z_stat))
-  }
-  
-  indata_df <- data.frame(time = time_var, status = event_var)
-  
-  set.seed(123)
-  idi_res <- IDI.INF(indata_df, covs0 = as.matrix(lp_base), covs1 = as.matrix(lp_new), t0 = t0, npert = 100) 
-  out_matrix <- IDI.INF.OUT(idi_res)
-  
-  idi_str <- paste0(sprintf("%.3f", out_matrix[1, 1]), " (", sprintf("%.3f", out_matrix[1, 2]), "-", sprintf("%.3f", out_matrix[1, 3]), ")")
-  idi_p   <- out_matrix[1, 4]
-  
-  nri_str <- paste0(sprintf("%.3f", out_matrix[3, 1]), " (", sprintf("%.3f", out_matrix[3, 2]), "-", sprintf("%.3f", out_matrix[3, 3]), ")")
-  nri_p   <- out_matrix[3, 4]
-  
-  return(list(c_new = new_c$c_str, p_delong = p_delong, nri = nri_str, p_nri = nri_p, idi = idi_str, p_idi = idi_p))
-}
-
-run_all_comparisons <- function(time_var, event_var, event_cr_var, lp_m1, lp_m2, lp_m3, lp_m4, weights_var, t0 = 120, is_cvm = FALSE, outcome_name) {
-  cat(paste("\n================ KẾT QUẢ CHO:", outcome_name, "================\n"))
-  
-  c_base_str <- get_c_ci(time_var, event_var, lp_m1, weights_var)$c_str
-  cat(sprintf("Mô hình gốc (TyHGB) - C-index: %s\n\n", c_base_str))
-  
-  cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
-              "Model so sánh", "C-index New (95%CI)", "P DeLong", "Cont. NRI (95%CI)", "P (NRI)", "IDI (95%CI)", "P (IDI)"))
-  cat(strrep("-", 108), "\n")
-  
-  models <- list(
-    list(name = "TyHGB+ABSI", lp = lp_m2),
-    list(name = "TyHGB+WWI",  lp = lp_m3),
-    list(name = "TyHGB+WHtR", lp = lp_m4)
-  )
-  
-  for (m in models) {
-    res <- compare_models(time_var, event_var, event_cr_var, lp_m1, m$lp, weights_var, t0, is_cvm)
-    p_dl_print <- ifelse(res$p_delong < 0.001, "<0.001", sprintf("%.4f", res$p_delong))
-    p_nri_print <- ifelse(res$p_nri < 0.001, "<0.001", sprintf("%.4f", res$p_nri))
-    p_idi_print <- ifelse(res$p_idi < 0.001, "<0.001", sprintf("%.4f", res$p_idi))
-    
-    cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
-                m$name, res$c_new, p_dl_print, res$nri, p_nri_print, res$idi, p_idi_print))
-  }
-  cat("\n")
-}
-
-cat("Đang xử lý Bootstrap 100 vòng. Sẽ mất vài phút...\n")
-
-run_all_comparisons(
-  time_var     = df_final$time_months, 
-  event_var    = df_final$status_acm, 
-  event_cr_var = df_final$status_acm,     
-  lp_m1        = df_final$lp_acm_m1,      
-  lp_m2        = df_final$lp_acm_m2, 
-  lp_m3        = df_final$lp_acm_m3, 
-  lp_m4        = df_final$lp_acm_m4, 
-  weights_var  = df_final$WTSAF2YR,
-  t0           = 120, 
-  is_cvm       = FALSE, 
-  outcome_name = "ALL-CAUSE MORTALITY (ACM) TẠI 10 NĂM"
-)
-
-run_all_comparisons(
-  time_var     = df_final$time_months, 
-  event_var    = df_final$status_cvm, 
-  event_cr_var = df_final$event_cr,       
-  lp_m1        = df_final$lp_cvm_m1,      
-  lp_m2        = df_final$lp_cvm_m2, 
-  lp_m3        = df_final$lp_cvm_m3, 
-  lp_m4        = df_final$lp_cvm_m4, 
-  weights_var  = df_final$WTSAF2YR,
-  t0           = 120, 
-  is_cvm       = TRUE, 
-  outcome_name = "CARDIOVASCULAR MORTALITY (CVM) TẠI 10 NĂM"
-)
+# #| label: tbl-incremental
+# #| tbl-cap: "Table 3: Incremental predictive value of adding indices to the base model"
+# 
+# get_c_ci <- function(time_var, event_var, lp_var, weights_var) {
+#   c_obj <- concordance(Surv(time_var, event_var) ~ lp_var, weights = weights_var)
+#   c_val <- ifelse(c_obj$concordance < 0.5, 1 - c_obj$concordance, c_obj$concordance)
+#   se <- sqrt(c_obj$var)
+#   lower <- c_val - 1.96 * se
+#   upper <- c_val + 1.96 * se
+#   return(list(c_str = paste0(sprintf("%.3f", c_val), " (", sprintf("%.3f", lower), "-", sprintf("%.3f", upper), ")"), 
+#               c_val = c_val, se = se))
+# }
+# 
+# compare_models <- function(time_var, event_var, event_cr_var, lp_base, lp_new, weights_var, t0, is_cvm) {
+#   
+#   base_c <- get_c_ci(time_var, event_var, lp_base, weights_var)
+#   new_c  <- get_c_ci(time_var, event_var, lp_new, weights_var)
+#   
+#   if(is_cvm) { 
+#     roc_base <- timeROC(T=time_var, delta=event_cr_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+#     roc_new  <- timeROC(T=time_var, delta=event_cr_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+#   } else {
+#     roc_base <- timeROC(T=time_var, delta=event_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+#     roc_new  <- timeROC(T=time_var, delta=event_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+#   }
+#   
+#   comp_res <- compare(roc_new, roc_base, adjusted=FALSE)
+#   p_delong <- if(!is.null(comp_res$p_values_AUC)) comp_res$p_values_AUC[1] else comp_res$p_values_AUC_1[1]
+#   
+#   if(is.na(p_delong)) {
+#     se_diff <- sqrt(base_c$se^2 + new_c$se^2)
+#     if (se_diff == 0) se_diff <- 1e-6 
+#     z_stat <- abs(new_c$c_val - base_c$c_val) / se_diff
+#     p_delong <- 2 * (1 - pnorm(z_stat))
+#   }
+#   
+#   indata_df <- data.frame(time = time_var, status = event_var)
+#   
+#   set.seed(123)
+#   idi_res <- IDI.INF(indata_df, covs0 = as.matrix(lp_base), covs1 = as.matrix(lp_new), t0 = t0, npert = 100) 
+#   out_matrix <- IDI.INF.OUT(idi_res)
+#   
+#   idi_str <- paste0(sprintf("%.3f", out_matrix[1, 1]), " (", sprintf("%.3f", out_matrix[1, 2]), "-", sprintf("%.3f", out_matrix[1, 3]), ")")
+#   idi_p   <- out_matrix[1, 4]
+#   
+#   nri_str <- paste0(sprintf("%.3f", out_matrix[3, 1]), " (", sprintf("%.3f", out_matrix[3, 2]), "-", sprintf("%.3f", out_matrix[3, 3]), ")")
+#   nri_p   <- out_matrix[3, 4]
+#   
+#   return(list(c_new = new_c$c_str, p_delong = p_delong, nri = nri_str, p_nri = nri_p, idi = idi_str, p_idi = idi_p))
+# }
+# 
+# run_all_comparisons <- function(time_var, event_var, event_cr_var, lp_m1, lp_m2, lp_m3, lp_m4, weights_var, t0 = 120, is_cvm = FALSE, outcome_name) {
+#   cat(paste("\n================ KẾT QUẢ CHO:", outcome_name, "================\n"))
+#   
+#   c_base_str <- get_c_ci(time_var, event_var, lp_m1, weights_var)$c_str
+#   cat(sprintf("Mô hình gốc (TyHGB) - C-index: %s\n\n", c_base_str))
+#   
+#   cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+#               "Model so sánh", "C-index New (95%CI)", "P DeLong", "Cont. NRI (95%CI)", "P (NRI)", "IDI (95%CI)", "P (IDI)"))
+#   cat(strrep("-", 108), "\n")
+#   
+#   models <- list(
+#     list(name = "TyHGB+ABSI", lp = lp_m2),
+#     list(name = "TyHGB+WWI",  lp = lp_m3),
+#     list(name = "TyHGB+WHtR", lp = lp_m4)
+#   )
+#   
+#   for (m in models) {
+#     res <- compare_models(time_var, event_var, event_cr_var, lp_m1, m$lp, weights_var, t0, is_cvm)
+#     p_dl_print <- ifelse(res$p_delong < 0.001, "<0.001", sprintf("%.4f", res$p_delong))
+#     p_nri_print <- ifelse(res$p_nri < 0.001, "<0.001", sprintf("%.4f", res$p_nri))
+#     p_idi_print <- ifelse(res$p_idi < 0.001, "<0.001", sprintf("%.4f", res$p_idi))
+#     
+#     cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+#                 m$name, res$c_new, p_dl_print, res$nri, p_nri_print, res$idi, p_idi_print))
+#   }
+#   cat("\n")
+# }
+# 
+# cat("Đang xử lý Bootstrap 100 vòng. Sẽ mất vài phút...\n")
+# 
+# run_all_comparisons(
+#   time_var     = df_final$time_months, 
+#   event_var    = df_final$status_acm, 
+#   event_cr_var = df_final$status_acm,     
+#   lp_m1        = df_final$lp_acm_m1,      
+#   lp_m2        = df_final$lp_acm_m2, 
+#   lp_m3        = df_final$lp_acm_m3, 
+#   lp_m4        = df_final$lp_acm_m4, 
+#   weights_var  = df_final$WTSAF2YR,
+#   t0           = 120, 
+#   is_cvm       = FALSE, 
+#   outcome_name = "ALL-CAUSE MORTALITY (ACM) TẠI 10 NĂM"
+# )
+# 
+# run_all_comparisons(
+#   time_var     = df_final$time_months, 
+#   event_var    = df_final$status_cvm, 
+#   event_cr_var = df_final$event_cr,       
+#   lp_m1        = df_final$lp_cvm_m1,      
+#   lp_m2        = df_final$lp_cvm_m2, 
+#   lp_m3        = df_final$lp_cvm_m3, 
+#   lp_m4        = df_final$lp_cvm_m4, 
+#   weights_var  = df_final$WTSAF2YR,
+#   t0           = 120, 
+#   is_cvm       = TRUE, 
+#   outcome_name = "CARDIOVASCULAR MORTALITY (CVM) TẠI 10 NĂM"
+# )
 ```
 
 ## 6. Dose-response relationship
@@ -694,6 +698,8 @@ final_rcs_plot <- (p_rcs_acm | p_rcs_cvm) +
     tag_suffix = ')'            
   ) &
   theme(plot.tag = element_text(size = 22, face = "bold")) 
+
+final_rcs_plot
 ```
 
 ## 7. Subgroup analyses
@@ -733,18 +739,14 @@ df_sub <- df_final %>%
   )
 
 sub_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_sub)
-all_adj_vars <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "INDFMPIR", "DMDEDUC2", "DMDMARTL", "diabetes", "hyperten", "cvd_hx")
+all_adj_vars <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten")
 
 var_list <- list(
   "Age" = list(col = "Age_group", rm_cov = "RIDAGEYR"),
   "Gender" = list(col = "Gender", rm_cov = "RIAGENDR"),
   "Race" = list(col = "RIDRETH1", rm_cov = "RIDRETH1"),
-  "Education" = list(col = "DMDEDUC2", rm_cov = "DMDEDUC2"),
-  "PIR" = list(col = "PIR_group", rm_cov = "INDFMPIR"),
-  "Marital status" = list(col = "DMDMARTL", rm_cov = "DMDMARTL"),
   "Diabetes" = list(col = "Diabetes_cat", rm_cov = "diabetes"),
   "Hypertension" = list(col = "Hyperten_cat", rm_cov = "hyperten"),
-  "Cardiovascular outcome" = list(col = "CVD_cat", rm_cov = "cvd_hx"),
   "Obesity" = list(col = "Obesity", rm_cov = NA) 
 )
 
@@ -897,7 +899,7 @@ df_med_clean <- df_final %>% filter(!is.na(LBXSUA))
 
 mediator_var <- "LBXSUA"
 
-med_covs <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "INDFMPIR", "DMDEDUC2", "DMDMARTL", "diabetes")
+med_covs <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten")
 med_covs_str <- paste(med_covs, collapse = " + ")
 
 med_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_med_clean)
@@ -979,7 +981,8 @@ final_mediation
 
 # 1. TẠO DATA SẠCH CHO FINE-GRAY (Tránh lỗi rớt data do NA ở các cột không liên quan)
 df_fg <- df_final[, c("time_months", "event_cr", "SDMVPSU", "SDMVSTRA", "WTSAF2YR", 
-                      "TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z", "RIDAGEYR", "LBXSATSI")]
+                      "TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z", 
+                      "RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten")]
 
 # Khai báo factor chuẩn cho package survival (0 = Censor, 1 = Sự kiện chính, 2 = Cạnh tranh)
 df_fg$event_cr_fg <- factor(df_fg$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
@@ -992,7 +995,7 @@ fg_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR * 
 
 # 3. THIẾT LẬP VÒNG LẶP (Y HỆT BƯỚC 2)
 markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
-adj_vars <- "RIDAGEYR + LBXSATSI"
+adj_vars <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
 
 get_fg_res <- function(marker) {
   
@@ -1065,90 +1068,272 @@ table_fg_gt
 #| label: fig-nomogram
 #| fig-cap: "Figure 6: Nomograms predicting 3-, 5-, and 10-year survival probabilities for ACM (A) and CVM (B)"
 #| fig-width: 14
-#| fig-height: 12
+#| fig-height: 14
 
-# ==============================================================================
-# BƯỚC 10: VẼ NOMOGRAM (Loại bỏ đa cộng tuyến & Tách riêng thang đo xác suất)
-# ==============================================================================
-library(rms)
-library(survival)
-library(dplyr)
+covs_str <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
 
-# 1. Khai báo 5 biến độc lập (ĐÃ BỎ Glucose, HDL, Triglyceride để chống Đa cộng tuyến)
-quant_vars <- c("TyHGB", "RIDAGEYR", "LBXWBCSI", "LBXSATSI", "LBXSASSI")
-
+model_vars <- c("TyHGB", "RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten")
 sys_vars <- c("time_months", "status_acm", "status_cvm", "event_cr", "WTSAF2YR")
 
-# 2. CHỌN ĐÚNG CỘT RỒI MỚI XÓA NA
+# 1. Xử lý Data: Lọc, ép kiểu về Data.frame
 df_nomo_rms <- df_final %>%
-  select(all_of(c(sys_vars, quant_vars))) %>% 
-  drop_na()
+  select(all_of(c(sys_vars, model_vars))) %>% 
+  drop_na() %>%
+  as.data.frame() # Chống Tibble error
 
-# Đặt datadist
+# ------------------------------------------------------------------------------
+# QUAN TRỌNG: PHẢI ÉP FACTOR TRƯỚC (Đổi số thành chữ)
+# ------------------------------------------------------------------------------
+df_nomo_rms$RIAGENDR <- factor(df_nomo_rms$RIAGENDR, levels = c(1, 2), labels = c("Male", "Female"))
+df_nomo_rms$diabetes <- factor(df_nomo_rms$diabetes, levels = c(0, 1), labels = c("No", "Yes"))
+df_nomo_rms$hyperten <- factor(df_nomo_rms$hyperten, levels = c(0, 1), labels = c("No", "Yes"))
+df_nomo_rms$RIDRETH1 <- as.factor(df_nomo_rms$RIDRETH1)
+
+# ------------------------------------------------------------------------------
+# RỒI MỚI DÁN LABEL SAU CÙNG (Để không bị hàm factor xóa mất)
+# ------------------------------------------------------------------------------
+label(df_nomo_rms$TyHGB)    <- "TyHGB Index"
+label(df_nomo_rms$RIDAGEYR) <- "Age (years)"
+label(df_nomo_rms$RIAGENDR) <- "Gender"
+label(df_nomo_rms$RIDRETH1) <- "Race/Ethnicity"
+label(df_nomo_rms$diabetes) <- "Diabetes"
+label(df_nomo_rms$hyperten) <- "Hypertension"
+
+# 2. Khởi tạo Datadist
 dd <- datadist(df_nomo_rms)
 options(datadist = "dd")
 
 # ------------------------------------------------------------------------------
-# 3. XÂY DỰNG MÔ HÌNH VÀ VẼ CHO ACM
+# 3. MÔ HÌNH VÀ NOMOGRAM CHO ACM
 # ------------------------------------------------------------------------------
-form_acm <- as.formula(paste("Surv(time_months, status_acm) ~", paste(quant_vars, collapse = " + ")))
-
-fit_acm_nomo <- cph(form_acm, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, weights = df_nomo_rms$WTSAF2YR)
+form_acm <- as.formula(paste("Surv(time_months, status_acm) ~ TyHGB +", covs_str))
+fit_acm_nomo <- cph(form_acm, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, 
+                    time.inc = 120, weights = df_nomo_rms$WTSAF2YR)
 
 surv_acm <- Survival(fit_acm_nomo)
 surv3_acm <- function(lp) surv_acm(36, lp)
 surv5_acm <- function(lp) surv_acm(60, lp)
 surv10_acm <- function(lp) surv_acm(120, lp)
 
-# Thang đo ACM: Tử vong chung cao hơn, rải từ 0.95 xuống 0.5 (khoảng cách thưa ra)
 prob_scale_acm <- c(0.95, 0.90, 0.80, 0.70, 0.60, 0.50)
-
-nom_acm <- nomogram(fit_acm_nomo, 
-                    fun = list(surv3_acm, surv5_acm, surv10_acm),
+nom_acm <- nomogram(fit_acm_nomo, fun = list(surv3_acm, surv5_acm, surv10_acm),
                     funlabel = c("3-Year ACM Survival", "5-Year ACM Survival", "10-Year ACM Survival"),
-                    fun.at = prob_scale_acm,
-                    lp = FALSE)
+                    fun.at = prob_scale_acm, lp = FALSE)
 
 # ------------------------------------------------------------------------------
-# 4. XÂY DỰNG MÔ HÌNH VÀ VẼ CHO CVM (FINE-GRAY)
+# 4. MÔ HÌNH VÀ NOMOGRAM CHO CVM (FINE-GRAY)
 # ------------------------------------------------------------------------------
 df_nomo_rms$event_cr_fg <- factor(df_nomo_rms$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
 fg_data_nomo <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_nomo_rms, etype = "CVM")
 fg_data_nomo$final_wt <- fg_data_nomo$WTSAF2YR * fg_data_nomo$fgwt
 
-# Cập nhật datadist cho bộ data Fine-Gray
-dd_fg <- datadist(fg_data_nomo)
-options(datadist = "dd_fg")
+# Gắn lại Label cho tập Fine-Gray vì hàm finegray cũng có tật xóa label
+label(fg_data_nomo$TyHGB)    <- "TyHGB Index"
+label(fg_data_nomo$RIDAGEYR) <- "Age (years)"
+label(fg_data_nomo$RIAGENDR) <- "Gender"
+label(fg_data_nomo$RIDRETH1) <- "Race/Ethnicity"
+label(fg_data_nomo$diabetes) <- "Diabetes"
+label(fg_data_nomo$hyperten) <- "Hypertension"
 
-form_cvm <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~", paste(quant_vars, collapse = " + ")))
+options(datadist = "dd") 
 
-fit_cvm_nomo <- cph(form_cvm, data = fg_data_nomo, x = TRUE, y = TRUE, surv = TRUE, weights = fg_data_nomo$final_wt)
+form_cvm <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB +", covs_str))
+fit_cvm_nomo <- cph(form_cvm, data = fg_data_nomo, x = TRUE, y = TRUE, surv = TRUE, 
+                    time.inc = 120, weights = fg_data_nomo$final_wt)
 
 surv_cvm <- Survival(fit_cvm_nomo)
 surv3_cvm <- function(lp) surv_cvm(36, lp)
 surv5_cvm <- function(lp) surv_cvm(60, lp)
 surv10_cvm <- function(lp) surv_cvm(120, lp)
 
-# Thang đo CVM: Tử vong tim mạch thấp hơn, bỏ 0.85 để chữ không cắn nhau
 prob_scale_cvm <- c(0.99, 0.95, 0.90, 0.80, 0.70)
-
-nom_cvm <- nomogram(fit_cvm_nomo, 
-                    fun = list(surv3_cvm, surv5_cvm, surv10_cvm),
+nom_cvm <- nomogram(fit_cvm_nomo, fun = list(surv3_cvm, surv5_cvm, surv10_cvm),
                     funlabel = c("3-Year CVM Survival", "5-Year CVM Survival", "10-Year CVM Survival"),
-                    fun.at = prob_scale_cvm,
-                    lp = FALSE)
+                    fun.at = prob_scale_cvm, lp = FALSE)
 
 # ------------------------------------------------------------------------------
 # 5. GỘP BIỂU ĐỒ LÊN HÌNH
 # ------------------------------------------------------------------------------
 par(mfrow=c(2,1), mar=c(5, 4, 4, 2) + 0.1)
-
-plot(nom_acm, cex.axis=0.8, xfrac=0.45)
+plot(nom_acm, cex.axis=0.8, xfrac=0.35)
 title("A. Nomogram for All-Cause Mortality (ACM)", adj = 0, line = 1, cex.main=1.2)
-
-plot(nom_cvm, cex.axis=0.8, xfrac=0.45)
+plot(nom_cvm, cex.axis=0.8, xfrac=0.35)
 title("B. Nomogram for Cardiovascular Mortality (CVM) - Fine-Gray Model", adj = 0, line = 1, cex.main=1.2)
 ```
 
+## 11. Calibration Plots with 1000 Bootstraps
 
+```{r}
+#| label: fig-calibration
+#| fig-cap: "Figure 7: Calibration plots comparing predicted vs observed 10-years"
+#| fig-width: 14
+#| fig-height: 6
+
+set.seed(123)
+cal_acm <- calibrate(fit_acm_nomo, cmethod='KM', method="crossvalidation", B=10, u=120)
+
+form_cvm_proxy <- as.formula(paste("Surv(time_months, event_cr == 1) ~ TyHGB +", covs_str))
+fit_cvm_cal_proxy <- cph(form_cvm_proxy, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, 
+                         time.inc = 120, weights = df_nomo_rms$WTSAF2YR)
+cal_cvm <- calibrate(fit_cvm_cal_proxy, cmethod='KM', method="crossvalidation", B=10, u=120)
+
+# 2. Xây dựng hàm "độ" giao diện bằng ggplot2
+plot_cal_ggplot <- function(cal_obj, title_str, color_theme, show_ylab = TRUE) {
+  
+  df_cal <- data.frame(
+    pred = cal_obj[, "mean.predicted"],
+    obs = cal_obj[, "KM"],
+    obs_corr = cal_obj[, "KM.corrected"]
+  )
+  
+  max_val <- max(c(df_cal$pred, df_cal$obs_corr), na.rm = TRUE) + 0.05
+  max_val <- min(max_val, 1) 
+  
+  p <- ggplot(df_cal, aes(x = pred)) +
+    # Đường lý tưởng 45 độ (Ideal)
+    geom_abline(intercept = 0, slope = 1, linetype = "dashed", color = "gray50", linewidth = 0.8) +
+    
+    # Đường Apparent (Chưa hiệu chỉnh)
+    geom_line(aes(y = obs, color = "Apparent (Original)"), linetype = "dotted", linewidth = 1) +
+    geom_point(aes(y = obs, color = "Apparent (Original)"), size = 2) +
+    
+    # Đường Bias-corrected (Đã hiệu chỉnh qua Cross-validation)
+    geom_line(aes(y = obs_corr, color = "Bias-corrected (Cross-validated)"), linewidth = 1.2) +
+    geom_point(aes(y = obs_corr, color = "Bias-corrected (Cross-validated)"), size = 1.5) +
+    
+    # Ép màu chuẩn tạp chí y khoa
+    scale_color_manual(name = "Model Performance:", 
+                       values = c("Apparent (Original)" = "black", 
+                                  "Bias-corrected (Cross-validated)" = color_theme)) +
+    coord_cartesian(xlim = c(0, max_val), ylim = c(0, max_val)) +
+    scale_x_continuous(breaks = seq(0, 1, by = 0.1)) +
+    scale_y_continuous(breaks = seq(0, 1, by = 0.1)) +
+    
+    # Trang trí Text & Label (Ẩn trục Y nếu show_ylab = FALSE)
+    labs(title = title_str, 
+         x = "Predicted 10-Year Probability", 
+         y = ifelse(show_ylab, "Observed Actual Proportion", "")) +
+    theme_classic() + # Chuyển sang theme classic chuẩn Y khoa
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      axis.title = element_text(size = 12, face = "bold"),
+      axis.text = element_text(size = 11, color = "black"),
+      legend.position = c(0.35, 0.85), # Đặt legend góc trên trái
+      legend.background = element_rect(fill = alpha("white", 0.9), color = NA),
+      legend.text = element_text(size = 10),
+      legend.title = element_text(size = 10, face = "bold", color = "gray30")
+    )
+  
+  return(p)
+}
+
+# 3. Gọi hàm vẽ và xuất hình (Hình CVM bên phải tắt trục Y đi)
+p_cal_acm <- plot_cal_ggplot(cal_acm, "A. 10-Year ACM Calibration", "#E64B35", show_ylab = TRUE) 
+p_cal_cvm <- plot_cal_ggplot(cal_cvm, "B. 10-Year CVM Calibration", "#4DBBD5", show_ylab = FALSE) 
+
+# Dùng patchwork ghép 2 hình song song
+p_cal_acm | p_cal_cvm
+```
+
+## 12. Decision Curve Analysis (DCA)
+
+```{r}
+#| label: fig-dca
+#| fig-cap: "Figure 8: Decision Curve Analysis (DCA) demonstrating the net benefit of the TyHGB clinical model at 10 years"
+#| fig-width: 14
+#| fig-height: 6
+
+df_dca <- as.data.frame(df_nomo_rms)
+
+# 1. TỰ TÍNH LẠI XÁC SUẤT TỬ VONG 10 NĂM
+surv10_acm_cal <- Survival(fit_acm_nomo)
+df_nomo_rms$prob_acm_10 <- 1 - surv10_acm_cal(120, predict(fit_acm_nomo, newdata = df_dca, type="lp"))
+
+surv10_cvm_cal <- Survival(fit_cvm_nomo)
+df_nomo_rms$prob_cvm_10 <- 1 - surv10_cvm_cal(120, predict(fit_cvm_nomo, newdata = df_dca, type="lp"))
+
+# 2. XÂY DỰNG HÀM VẼ DCA ĐÃ TỐI ƯU GIAO DIỆN
+plot_beautiful_dca <- function(form, event_time, title_str, line_color, var_name) {
+  
+  lbl_list <- list()
+  lbl_list[[var_name]] <- "TyHGB Model"
+  
+  dca_obj <- dca(form, data = df_nomo_rms, time = event_time, label = lbl_list)
+  df <- as_tibble(dca_obj) %>% dplyr::filter(!is.na(net_benefit))
+  
+  best_strat <- df %>%
+    dplyr::group_by(threshold) %>%
+    dplyr::slice_max(order_by = net_benefit, n = 1, with_ties = FALSE) %>%
+    dplyr::ungroup() %>%
+    dplyr::arrange(threshold)
+  
+  best_strat <- best_strat %>%
+    dplyr::mutate(group = cumsum(label != dplyr::lag(label, default = dplyr::first(label))))
+  
+  regions <- best_strat %>%
+    dplyr::group_by(group, label) %>%
+    dplyr::summarize(
+      x_start = min(threshold),
+      x_end = max(threshold),
+      x_mid = mean(threshold),
+      .groups = "drop"
+    ) %>%
+    dplyr::filter((x_end - x_start) > 0.02) 
+  
+  max_nb <- max(df$net_benefit, na.rm = TRUE)
+  y_min <- -max_nb * 0.12  
+  strip_y <- -max_nb * 0.06 
+  
+  p <- ggplot() +
+    # 1. Dải băng chiến lược tối ưu (Nằm dưới đáy)
+    geom_rect(data = regions, 
+              aes(xmin = x_start, xmax = x_end, ymin = y_min, ymax = 0, fill = label), 
+              alpha = 0.2) +
+    
+    # 2. Chữ text trong dải băng
+    geom_text(data = regions, 
+              aes(x = x_mid, y = strip_y, label = label), 
+              color = "gray20", size = 3.5, fontface = "bold", vjust = 0.5) +
+    
+    # 3. VẼ ĐẦY ĐỦ CẢ 3 ĐƯỜNG (Để Legend bắt được "Treat None")
+    geom_line(data = df, 
+              aes(x = threshold, y = net_benefit, color = label, linetype = label), 
+              linewidth = 1.2) +
+    
+    # 4. Định dạng màu sắc chuẩn cho đủ 3 nhân vật
+    scale_color_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyHGB Model" = line_color)) +
+    scale_fill_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyHGB Model" = line_color)) +
+    scale_linetype_manual(values = c("Treat All" = "solid", "Treat None" = "solid", "TyHGB Model" = "solid")) +
+    
+    coord_cartesian(xlim = c(0, max(df$threshold)), ylim = c(y_min, max_nb * 1.05)) +
+    scale_x_continuous(labels = scales::percent_format(accuracy = 1), expand = c(0, 0)) +
+    scale_y_continuous(expand = c(0, 0)) +
+    
+    labs(title = title_str, x = "Threshold Probability", y = "Net Benefit") +
+    theme_classic() +
+    theme(
+      plot.title = element_text(face = "bold", size = 14),
+      axis.title = element_text(face = "bold", size = 12),
+      axis.text = element_text(size = 11, color = "black"),
+      axis.text.x = element_text(margin = margin(t = 5)), # Tách số khỏi trục x 1 xíu cho dễ đọc
+      legend.position = c(0.85, 0.85),  
+      legend.title = element_blank(),
+      legend.text = element_text(size = 11, face = "bold"),
+      legend.background = element_rect(fill = alpha("white", 0.8), color = "gray80", linewidth = 0.5),
+      panel.grid.major.y = element_line(color = "gray90", linetype = "dotted")
+    ) +
+    guides(fill = "none") 
+    
+  return(p)
+}
+
+# 3. VẼ VÀ GHÉP 2 HÌNH SONG SONG
+p_dca_acm <- plot_beautiful_dca(Surv(time_months, status_acm) ~ prob_acm_10, 120, 
+                                "A. 10-Year ACM Decision Curve", "#E64B35", "prob_acm_10")
+
+p_dca_cvm <- plot_beautiful_dca(Surv(time_months, event_cr == 1) ~ prob_cvm_10, 120, 
+                                "B. 10-Year CVM Decision Curve", "#4DBBD5", "prob_cvm_10")
+
+p_dca_acm | p_dca_cvm
+```
 
