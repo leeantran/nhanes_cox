@@ -1337,3 +1337,312 @@ p_dca_cvm <- plot_beautiful_dca(Surv(time_months, event_cr == 1) ~ prob_cvm_10, 
 p_dca_acm | p_dca_cvm
 ```
 
+## 13. Threshold Effect Analysis (Two-piecewise Cox Model)
+
+```{r}
+#| label: tbl-threshold
+#| tbl-cap: "Supplemental Table 4: Threshold effect analysis of TyHGB on ACM and CVM using two-piecewise Cox regression"
+
+library(dplyr)
+library(survey)
+library(survival)
+library(gt)
+
+covs_str <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
+
+# Hàm tìm điểm uốn (Inflection point) tự động
+find_inflection <- function(event_var) {
+  # Quét từ bách phân vị thứ 15 đến 85 của TyHGB
+  search_grid <- seq(quantile(df_final$TyHGB, 0.15), quantile(df_final$TyHGB, 0.85), length.out = 30)
+  best_k <- NA; best_ll <- -Inf
+  
+  for(k in search_grid) {
+    d_temp <- df_final %>% 
+      mutate(T1 = ifelse(TyHGB < k, TyHGB, k),
+             T2 = ifelse(TyHGB >= k, TyHGB - k, 0))
+    des <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = d_temp)
+    
+    form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ T1 + T2 +", covs_str))
+    fit <- suppressWarnings(tryCatch(svycoxph(form, design = des), error = function(e) NULL))
+    
+    if(!is.null(fit) && fit$ll[2] > best_ll) {
+      best_ll <- fit$ll[2]
+      best_k <- k
+    }
+  }
+  return(best_k)
+}
+
+run_piecewise <- function(event_var, outcome_name) {
+  k <- find_inflection(event_var)
+  
+  d_opt <- df_final %>% mutate(T1 = ifelse(TyHGB < k, TyHGB, k), T2 = ifelse(TyHGB >= k, TyHGB - k, 0))
+  des_opt <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = d_opt)
+  
+  # Standard Cox (Linear)
+  fit_lin <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = des_opt)
+  sm_lin <- summary(fit_lin)
+  hr_lin <- sprintf("%.3f (%.3f-%.3f)", sm_lin$conf.int["TyHGB", 1], sm_lin$conf.int["TyHGB", 3], sm_lin$conf.int["TyHGB", 4])
+  p_lin <- ifelse(sm_lin$coefficients["TyHGB", 5] < 0.001, "<0.001", sprintf("%.3f", sm_lin$coefficients["TyHGB", 5]))
+  
+  # Two-piecewise Cox
+  fit_pw <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ T1 + T2 +", covs_str)), design = des_opt)
+  sm_pw <- summary(fit_pw)
+  
+  hr_t1 <- sprintf("%.3f (%.3f-%.3f)", sm_pw$conf.int["T1", 1], sm_pw$conf.int["T1", 3], sm_pw$conf.int["T1", 4])
+  p_t1 <- ifelse(sm_pw$coefficients["T1", 5] < 0.001, "<0.001", sprintf("%.3f", sm_pw$coefficients["T1", 5]))
+  
+  hr_t2 <- sprintf("%.3f (%.3f-%.3f)", sm_pw$conf.int["T2", 1], sm_pw$conf.int["T2", 3], sm_pw$conf.int["T2", 4])
+  p_t2 <- ifelse(sm_pw$coefficients["T2", 5] < 0.001, "<0.001", sprintf("%.3f", sm_pw$coefficients["T2", 5]))
+  
+  # So sánh mô hình bằng Log-likelihood ratio test (P for LRT)
+  lrt_p <- 1 - pchisq(2 * (fit_pw$ll[2] - fit_lin$ll[2]), df = 1)
+  lrt_p_str <- ifelse(lrt_p < 0.001, "<0.001", sprintf("%.3f", lrt_p))
+  
+  data.frame(
+    Outcome = outcome_name, Model = c("Standard linear model", "Two-piecewise model", 
+                                      sprintf("  TyHGB < %.1f (Inflection point)", k),
+                                      sprintf("  TyHGB >= %.1f", k), "P for LRT"),
+    `HR (95% CI)` = c(hr_lin, "", hr_t1, hr_t2, ""), `P value` = c(p_lin, "", p_t1, p_t2, lrt_p_str),
+    check.names = FALSE
+  )
+}
+
+df_thresh <- bind_rows(run_piecewise("status_acm", "All-Cause Mortality"), run_piecewise("status_cvm", "Cardiovascular Mortality"))
+
+df_thresh %>% gt(groupname_col = "Outcome") %>%
+  tab_options(row_group.font.weight = "bold", row_group.background.color = "#E8F4F0") %>%
+  cols_align(align = "left", columns = 1)
+```
+
+## 14. Detailed Mediation Analysis
+
+```{r}
+#| label: tbl-mediation
+#| tbl-cap: "Supplemental Table 5: Detailed mediation analysis of TyHGB on ACM and CVM via multiple biomarkers"
+
+med_vars <- c("LBXSUA" = "Uric Acid", "LBXWBCSI" = "WBC Count", "LBXSASSI" = "AST", 
+              "LBXSATSI" = "ALT", "LBDSGLSI" = "Fasting Glucose", "LBDHDD" = "HDL-C")
+covs_med <- "RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten"
+
+run_sobel_med <- function(event_var, outcome_label) {
+  res_list <- list()
+  for(v in names(med_vars)) {
+    d_clean <- df_final[!is.na(df_final[[v]]), ]
+    des <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_clean)
+    
+    # Path A: X -> M
+    fit_a <- svyglm(as.formula(paste(v, "~ TyHGB +", covs_med)), design = des)
+    a <- coef(fit_a)["TyHGB"]; sa <- summary(fit_a)$coef["TyHGB", "Std. Error"]
+    
+    # Path B & C': X + M -> Y
+    fit_b <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", v, "+", covs_med)), design = des)
+    b <- coef(fit_b)[v]; sb <- summary(fit_b)$coef[v, "Std. Error"]
+    c_prime <- coef(fit_b)["TyHGB"]; sc_prime <- summary(fit_b)$coef["TyHGB", "Std. Error"]
+    
+    # Path C (Total)
+    fit_c <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", covs_med)), design = des)
+    c_tot <- coef(fit_c)["TyHGB"]; sc_tot <- summary(fit_c)$coef["TyHGB", "Std. Error"]
+    
+    # Sobel Test
+    ab <- a * b
+    seb <- sqrt(a^2 * sb^2 + b^2 * sa^2)
+    z_ab <- ab / seb
+    p_ab <- 2 * (1 - pnorm(abs(z_ab)))
+    
+    prop_med <- (ab / c_tot) * 100
+    if(prop_med < 0) prop_med <- 0
+    
+    fmt <- function(est, se) sprintf("%.3f (%.3f to %.3f)", est, est - 1.96*se, est + 1.96*se)
+    fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+    
+    res_list[[length(res_list)+1]] <- data.frame(
+      Outcome = outcome_label, Mediator = med_vars[v],
+      `ACME (95% CI)` = fmt(ab, seb), `P (ACME)` = fmt_p(p_ab),
+      `ADE (95% CI)` = fmt(c_prime, sc_prime), `P (ADE)` = fmt_p(summary(fit_b)$coef["TyHGB", 5]),
+      `Prop. Mediated (%)` = sprintf("%.2f%%", prop_med), check.names = FALSE
+    )
+  }
+  bind_rows(res_list)
+}
+
+df_med_tbl <- bind_rows(run_sobel_med("status_acm", "All-Cause Mortality"), run_sobel_med("status_cvm", "Cardiovascular Mortality"))
+
+df_med_tbl %>% gt(groupname_col = "Outcome") %>%
+  tab_options(row_group.font.weight = "bold", row_group.background.color = "#E8F4F0") %>%
+  cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
+```
+
+## 15. Sensitivity Analysis (Excluding deaths within 24 months)
+
+```{r}
+#| label: tbl-sens
+#| tbl-cap: "Supplemental Table 6: Association between TyHGB and mortality excluding events within the first 24 months"
+
+# Lọc bỏ tử vong trong 24 tháng đầu
+df_sens <- df_final %>% filter(time_months > 24) %>% mutate(TyHGB_Q_num = as.numeric(TyHGB_Q))
+des_sens <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_sens)
+
+mods <- list("Model 1" = "", "Model 2" = "+ RIDAGEYR + RIAGENDR", "Model 3" = paste("+", covs_str))
+
+run_sens_model <- function(event_var, outcome_name) {
+  res_list <- list()
+  for(m in names(mods)) {
+    # Continuous
+    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB", mods[[m]]))
+    fit_cont <- svycoxph(f_cont, design = des_sens)
+    sm_cont <- summary(fit_cont)
+    hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB", 1], sm_cont$conf.int["TyHGB", 3], sm_cont$conf.int["TyHGB", 4])
+    p_cont <- ifelse(sm_cont$coef["TyHGB", 5] < 0.001, "<0.001", sprintf("%.3f", sm_cont$coef["TyHGB", 5]))
+    
+    # Quartiles
+    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods[[m]]))
+    fit_q <- svycoxph(f_q, design = des_sens)
+    sm_q <- summary(fit_q)
+    
+    # P for trend
+    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods[[m]]))
+    fit_trend <- svycoxph(f_trend, design = des_sens)
+    p_trend <- ifelse(summary(fit_trend)$coef["TyHGB_Q_num", 5] < 0.001, "<0.001", sprintf("%.3f", summary(fit_trend)$coef["TyHGB_Q_num", 5]))
+    
+    res_list[[length(res_list)+1]] <- data.frame(
+      Outcome = outcome_name, TyHGB = c("Continuous", "Q1", "Q2", "Q3", "Q4", "P for trend"),
+      Model = m,
+      `HR (95% CI)` = c(hr_cont, "Ref.", 
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ2", 1], sm_q$conf.int["TyHGB_QQ2", 3], sm_q$conf.int["TyHGB_QQ2", 4]),
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ3", 1], sm_q$conf.int["TyHGB_QQ3", 3], sm_q$conf.int["TyHGB_QQ3", 4]),
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ4", 1], sm_q$conf.int["TyHGB_QQ4", 3], sm_q$conf.int["TyHGB_QQ4", 4]), ""),
+      `P value` = c(p_cont, "-", 
+                    sprintf("%.3f", sm_q$coef["TyHGB_QQ2", 5]), sprintf("%.3f", sm_q$coef["TyHGB_QQ3", 5]), sprintf("%.3f", sm_q$coef["TyHGB_QQ4", 5]), p_trend),
+      check.names = FALSE
+    )
+  }
+  bind_rows(res_list)
+}
+
+df_sens_tbl <- bind_rows(run_sens_model("status_acm", "All-Cause Mortality"), run_sens_model("status_cvm", "Cardiovascular Mortality")) %>%
+  tidyr::pivot_wider(names_from = Model, values_from = c(`HR (95% CI)`, `P value`))
+
+df_sens_tbl %>% select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3")) %>%
+  gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0")
+```
+
+## 16. Multiple Imputation Stability Check
+
+```{r}
+#| label: fig-mice-stability
+#| fig-cap: "Supplemental Figure: Stability of the TyHGB prognostic value across multiple imputed datasets (m=5)"
+#| fig-width: 14
+#| fig-height: 6
+
+library(mice)
+library(broom)
+
+# Chạy MICE 5 vòng
+imp_5 <- mice(df_step1[, vars_to_impute], m = 5, method = 'pmm', seed = 123, printFlag = FALSE)
+
+get_mice_hr <- function(event_var, title) {
+  res_df <- data.frame()
+  estimates <- c(); vars <- c()
+  
+  for(i in 1:5) {
+    d_i <- df_step1
+    d_i[, vars_to_impute] <- complete(imp_5, i)
+    d_i <- d_i %>% mutate(
+      HSI = 8*(LBXSATSI/LBXSASSI) + BMXBMI + ifelse(RIAGENDR==2,2,0) + ifelse(diabetes==1,2,0),
+      steatosis = ifelse(HSI > 36, 1, 0),
+      cm_risk = ifelse(BMXBMI>=25 | (RIAGENDR==1 & BMXWAIST>=94) | (RIAGENDR==2 & BMXWAIST>=80) | LBDSGLSI>=5.55 | diabetes==1 | hyperten==1 | LBXTR>=150 | (RIAGENDR==1 & LBDHDD<40) | (RIAGENDR==2 & LBDHDD<50), 1, 0),
+      is_masld = ifelse(steatosis==1 & cm_risk==1, 1, 0),
+      TyHGB = (LBXTR/LBDHDD) + (0.7*LBDSGLSI) + (0.1*BMXBMI),
+      status_acm = ifelse(mortstat==1, 1, 0),
+      status_cvm = ifelse(mortstat==1 & ucod_leading %in% c("001","005"), 1, 0),
+      time_months = permth_int
+    ) %>% filter(is_masld == 1, (is.na(RIDEXPRG) | RIDEXPRG != 1), !is.na(mortstat), !is.na(time_months), eligstat == 1)
+    
+    d_i$diabetes <- as.numeric(as.character(d_i$diabetes)); d_i$hyperten <- as.numeric(as.character(d_i$hyperten))
+    
+    des_i <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_i)
+    fit_i <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = des_i)
+    
+    estimates[i] <- coef(fit_i)["TyHGB"]
+    vars[i] <- vcov(fit_i)["TyHGB", "TyHGB"]
+    
+    res_df <- rbind(res_df, data.frame(Imputation = paste("Imputation", i), HR = exp(estimates[i]), 
+                                       LCI = exp(estimates[i] - 1.96*sqrt(vars[i])), UCI = exp(estimates[i] + 1.96*sqrt(vars[i]))))
+  }
+  
+  # Rubin's Rules for Pooling
+  Q_bar <- mean(estimates)
+  U_bar <- mean(vars)
+  B <- var(estimates)
+  T_var <- U_bar + (1 + 1/5) * B
+  
+  res_df <- rbind(res_df, data.frame(Imputation = "Pooled (Rubin's Rules)", HR = exp(Q_bar), 
+                                     LCI = exp(Q_bar - 1.96*sqrt(T_var)), UCI = exp(Q_bar + 1.96*sqrt(T_var))))
+  res_df$Imputation <- factor(res_df$Imputation, levels = rev(res_df$Imputation))
+  
+  ggplot(res_df, aes(x = HR, y = Imputation)) +
+    geom_vline(xintercept = 1, linetype = "dashed", color = "black") +
+    geom_errorbarh(aes(xmin = LCI, xmax = UCI), height = 0.2, color = "#0055A4", linewidth = 1) +
+    geom_point(size = 4, color = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", "#E64B35", "#0055A4"), 
+               shape = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", 18, 16)) +
+    theme_classic() + labs(title = title, x = "Hazard Ratio (95% CI)", y = "") +
+    theme(plot.title = element_text(face = "bold"), axis.text = element_text(size = 11, color="black", face="bold"))
+}
+
+p_mice_acm <- get_mice_hr("status_acm", "A. ACM Models Stability")
+p_mice_cvm <- get_mice_hr("status_cvm", "B. CVM Models Stability")
+
+p_mice_acm | p_mice_cvm
+```
+
+## 17. E-Value Analysis
+
+```{r}
+#| label: fig-evalue
+#| fig-cap: "Supplemental Figure: E-value curves representing the minimum strength of an unmeasured confounder required to nullify the TyHGB effect"
+#| fig-width: 14
+#| fig-height: 6
+
+# Cài package EValue nếu chưa có: install.packages("EValue")
+library(EValue)
+
+plot_evalue <- function(event_var, title) {
+  # Lấy HR và LCI của mô hình 3
+  fit <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = masld_design)
+  hr <- exp(coef(fit)["TyHGB"])
+  lci <- exp(coef(fit)["TyHGB"] - 1.96*sqrt(vcov(fit)["TyHGB", "TyHGB"]))
+  
+  # Tính E-value
+  ev <- evalues.HR(estimate = hr, lo = lci, hi = NA, rare = TRUE)
+  e_point <- ev[2, "point"]
+  e_lower <- ev[2, "lower"]
+  
+  # Tạo data mô phỏng đường cong
+  rr_ud <- seq(1, max(e_point * 2, 5), length.out = 100)
+  rr_eu_point <- (hr * rr_ud - hr) / (rr_ud - hr)
+  rr_eu_lower <- (lci * rr_ud - lci) / (rr_ud - lci)
+  
+  df_curve <- data.frame(rr_ud = rr_ud, rr_eu_point = rr_eu_point, rr_eu_lower = rr_eu_lower) %>%
+    filter(rr_eu_point > 1 & rr_eu_point < max(rr_ud) & rr_eu_lower > 1)
+  
+  ggplot(df_curve, aes(x = rr_ud)) +
+    geom_line(aes(y = rr_eu_point, color = "Point Estimate"), linewidth = 1.2) +
+    geom_line(aes(y = rr_eu_lower, color = "Lower Confidence Limit"), linewidth = 1.2, linetype = "dashed") +
+    geom_point(aes(x = e_point, y = e_point), color = "#E64B35", size = 4) +
+    geom_point(aes(x = e_lower, y = e_lower), color = "#0055A4", size = 4) +
+    annotate("text", x = e_point + 0.3, y = e_point + 0.3, label = sprintf("E-value = %.2f", e_point), fontface="bold", color="#E64B35") +
+    annotate("text", x = e_lower + 0.3, y = e_lower + 0.3, label = sprintf("E-value (LCI) = %.2f", e_lower), fontface="bold", color="#0055A4") +
+    scale_color_manual(values = c("Point Estimate" = "#E64B35", "Lower Confidence Limit" = "#0055A4")) +
+    coord_cartesian(xlim = c(1, max(df_curve$rr_ud)*0.6), ylim = c(1, max(df_curve$rr_ud)*0.6)) +
+    labs(title = title, x = expression(bold(RR[UD])~"(Confounder-Outcome Effect)"), y = expression(bold(RR[EU])~"(Exposure-Confounder Effect)")) +
+    theme_bw() + theme(legend.position = c(0.75, 0.85), legend.title = element_blank(), 
+                       plot.title = element_text(face="bold"), legend.background = element_rect(color="black"))
+}
+
+p_ev_acm <- plot_evalue("status_acm", "A. E-value for All-Cause Mortality")
+p_ev_cvm <- plot_evalue("status_cvm", "B. E-value for Cardiovascular Mortality")
+
+p_ev_acm | p_ev_cvm
+```
+
