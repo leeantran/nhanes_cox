@@ -906,19 +906,22 @@ med_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, 
 
 draw_mediation_plot <- function(event_var, title_str) {
   
+  # Path A
   form_path_a <- as.formula(paste(mediator_var, "~ TyHGB +", med_covs_str))
   fit_path_a <- svyglm(form_path_a, design = med_design, family = gaussian())
   sm_a <- summary(fit_path_a)
   beta_a <- coef(fit_path_a)["TyHGB"]
-  se_a <- sm_a$coefficients["TyHGB", "Std. Error"]
+  se_a <- sqrt(vcov(fit_path_a)["TyHGB", "TyHGB"])
   p_a <- sm_a$coefficients["TyHGB", "Pr(>|t|)"]
   
+  # Total Effect
   form_tot <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", med_covs_str))
   fit_tot <- svycoxph(form_tot, design = med_design)
   sm_tot <- summary(fit_tot)
   beta_tot <- coef(fit_tot)["TyHGB"]
   p_tot <- sm_tot$coefficients["TyHGB", "Pr(>|z|)"]
   
+  # Direct Effect & Path B
   form_dir <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", mediator_var, "+", med_covs_str))
   fit_dir <- svycoxph(form_dir, design = med_design)
   sm_dir <- summary(fit_dir)
@@ -926,17 +929,20 @@ draw_mediation_plot <- function(event_var, title_str) {
   p_dir <- sm_dir$coefficients["TyHGB", "Pr(>|z|)"]
   
   med_row <- grep(paste0("^", mediator_var), rownames(sm_dir$conf.int), value = TRUE)[1]
+  beta_b <- coef(fit_dir)[med_row]
   hr_b <- sm_dir$conf.int[med_row, "exp(coef)"]
   p_b <- sm_dir$coefficients[med_row, "Pr(>|z|)"]
   
-  prop_med <- (beta_tot - beta_dir) / beta_tot * 100
+  # FIX: TÍNH LẠI PHẦN TRĂM BẰNG PHƯƠNG PHÁP SOBEL (Khớp 100% với Bảng 14)
+  ab <- beta_a * beta_b
+  prop_med <- (ab / beta_tot) * 100
   if(is.na(prop_med) || prop_med < 0) prop_med <- 0 
   
   fmt_p <- function(p) ifelse(!is.na(p) & p < 0.001, "P<0.001", sprintf("P=%.3f", p))
-  str_tot <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", sm_tot$conf.int["TyHGB", 1], sm_tot$conf.int["TyHGB", 3], sm_tot$conf.int["TyHGB", 4], fmt_p(p_tot))
-  str_dir <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", sm_dir$conf.int["TyHGB", 1], sm_dir$conf.int["TyHGB", 3], sm_dir$conf.int["TyHGB", 4], fmt_p(p_dir))
-  str_a <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", beta_a, beta_a-1.96*se_a, beta_a+1.96*se_a, fmt_p(p_a))
-  str_b <- sprintf("%.3f(95%%CI:%.3f~%.3f, %s)", hr_b, sm_dir$conf.int[med_row, 3], sm_dir$conf.int[med_row, 4], fmt_p(p_b))
+  str_tot <- sprintf("%.3f (95%%CI: %.3f~%.3f, %s)", sm_tot$conf.int["TyHGB", 1], sm_tot$conf.int["TyHGB", 3], sm_tot$conf.int["TyHGB", 4], fmt_p(p_tot))
+  str_dir <- sprintf("%.3f (95%%CI: %.3f~%.3f, %s)", sm_dir$conf.int["TyHGB", 1], sm_dir$conf.int["TyHGB", 3], sm_dir$conf.int["TyHGB", 4], fmt_p(p_dir))
+  str_a <- sprintf("%.3f (95%%CI: %.3f~%.3f, %s)", beta_a, beta_a-1.96*se_a, beta_a+1.96*se_a, fmt_p(p_a))
+  str_b <- sprintf("%.3f (95%%CI: %.3f~%.3f, %s)", hr_b, sm_dir$conf.int[med_row, 3], sm_dir$conf.int[med_row, 4], fmt_p(p_b))
   str_prop <- sprintf("%.2f%%", prop_med)
   
   boxes <- data.frame(x = c(1.5, 8.5, 1.5, 8.5, 5), y = c(6, 6, 1, 1, 4),
@@ -965,9 +971,7 @@ p_med_acm <- draw_mediation_plot("status_acm", "All-cause\nmortality")
 p_med_cvm <- draw_mediation_plot("status_cvm", "Cardiovascular\nmortality")
 
 final_mediation <- (p_med_acm | p_med_cvm) + 
-  plot_annotation(tag_levels = 'A',
-                  tag_prefix = '(',
-                  tag_suffix = ')') +
+  plot_annotation(tag_levels = 'A', tag_prefix = '(', tag_suffix = ')') +
   theme(plot.tag = element_text(size = 22, face = "bold"))
 
 final_mediation
@@ -1383,17 +1387,22 @@ run_piecewise <- function(event_var, outcome_name) {
   fit_lin <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = des_opt)
   sm_lin <- summary(fit_lin)
   hr_lin <- sprintf("%.3f (%.3f-%.3f)", sm_lin$conf.int["TyHGB", 1], sm_lin$conf.int["TyHGB", 3], sm_lin$conf.int["TyHGB", 4])
-  p_lin <- ifelse(sm_lin$coefficients["TyHGB", 5] < 0.001, "<0.001", sprintf("%.3f", sm_lin$coefficients["TyHGB", 5]))
+  
+  # FIX P-VALUE TẠI ĐÂY (Gọi đích danh Pr(>|z|))
+  p_val_lin <- sm_lin$coefficients["TyHGB", "Pr(>|z|)"]
+  p_lin <- ifelse(p_val_lin < 0.001, "<0.001", sprintf("%.3f", p_val_lin))
   
   # Two-piecewise Cox
   fit_pw <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ T1 + T2 +", covs_str)), design = des_opt)
   sm_pw <- summary(fit_pw)
   
   hr_t1 <- sprintf("%.3f (%.3f-%.3f)", sm_pw$conf.int["T1", 1], sm_pw$conf.int["T1", 3], sm_pw$conf.int["T1", 4])
-  p_t1 <- ifelse(sm_pw$coefficients["T1", 5] < 0.001, "<0.001", sprintf("%.3f", sm_pw$coefficients["T1", 5]))
+  p_val_t1 <- sm_pw$coefficients["T1", "Pr(>|z|)"]
+  p_t1 <- ifelse(p_val_t1 < 0.001, "<0.001", sprintf("%.3f", p_val_t1))
   
   hr_t2 <- sprintf("%.3f (%.3f-%.3f)", sm_pw$conf.int["T2", 1], sm_pw$conf.int["T2", 3], sm_pw$conf.int["T2", 4])
-  p_t2 <- ifelse(sm_pw$coefficients["T2", 5] < 0.001, "<0.001", sprintf("%.3f", sm_pw$coefficients["T2", 5]))
+  p_val_t2 <- sm_pw$coefficients["T2", "Pr(>|z|)"]
+  p_t2 <- ifelse(p_val_t2 < 0.001, "<0.001", sprintf("%.3f", p_val_t2))
   
   # So sánh mô hình bằng Log-likelihood ratio test (P for LRT)
   lrt_p <- 1 - pchisq(2 * (fit_pw$ll[2] - fit_lin$ll[2]), df = 1)
@@ -1431,35 +1440,44 @@ run_sobel_med <- function(event_var, outcome_label) {
     d_clean <- df_final[!is.na(df_final[[v]]), ]
     des <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_clean)
     
-    # Path A: X -> M
+    # Path A: X -> M (svyglm)
     fit_a <- svyglm(as.formula(paste(v, "~ TyHGB +", covs_med)), design = des)
-    a <- coef(fit_a)["TyHGB"]; sa <- summary(fit_a)$coef["TyHGB", "Std. Error"]
+    a <- coef(fit_a)["TyHGB"]
+    sa <- sqrt(vcov(fit_a)["TyHGB", "TyHGB"]) # Dùng vcov() an toàn tuyệt đối
     
-    # Path B & C': X + M -> Y
+    # Path B & C': X + M -> Y (svycoxph)
     fit_b <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", v, "+", covs_med)), design = des)
-    b <- coef(fit_b)[v]; sb <- summary(fit_b)$coef[v, "Std. Error"]
-    c_prime <- coef(fit_b)["TyHGB"]; sc_prime <- summary(fit_b)$coef["TyHGB", "Std. Error"]
+    b <- coef(fit_b)[v]
+    sb <- sqrt(vcov(fit_b)[v, v]) # Lấy sai số chuẩn từ ma trận hiệp phương sai
+    
+    c_prime <- coef(fit_b)["TyHGB"]
+    sc_prime <- sqrt(vcov(fit_b)["TyHGB", "TyHGB"])
     
     # Path C (Total)
     fit_c <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", covs_med)), design = des)
-    c_tot <- coef(fit_c)["TyHGB"]; sc_tot <- summary(fit_c)$coef["TyHGB", "Std. Error"]
+    c_tot <- coef(fit_c)["TyHGB"]
+    sc_tot <- sqrt(vcov(fit_c)["TyHGB", "TyHGB"])
     
-    # Sobel Test
+    # Sobel Test (Tính Delta Method)
     ab <- a * b
     seb <- sqrt(a^2 * sb^2 + b^2 * sa^2)
     z_ab <- ab / seb
     p_ab <- 2 * (1 - pnorm(abs(z_ab)))
     
+    # Tính tỷ lệ phần trăm Mediation
     prop_med <- (ab / c_tot) * 100
     if(prop_med < 0) prop_med <- 0
     
+    # Format hiển thị
     fmt <- function(est, se) sprintf("%.3f (%.3f to %.3f)", est, est - 1.96*se, est + 1.96*se)
     fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
+    
+    p_ade <- summary(fit_b)$coef["TyHGB", "Pr(>|z|)"]
     
     res_list[[length(res_list)+1]] <- data.frame(
       Outcome = outcome_label, Mediator = med_vars[v],
       `ACME (95% CI)` = fmt(ab, seb), `P (ACME)` = fmt_p(p_ab),
-      `ADE (95% CI)` = fmt(c_prime, sc_prime), `P (ADE)` = fmt_p(summary(fit_b)$coef["TyHGB", 5]),
+      `ADE (95% CI)` = fmt(c_prime, sc_prime), `P (ADE)` = fmt_p(p_ade),
       `Prop. Mediated (%)` = sprintf("%.2f%%", prop_med), check.names = FALSE
     )
   }
@@ -1479,9 +1497,16 @@ df_med_tbl %>% gt(groupname_col = "Outcome") %>%
 #| label: tbl-sens
 #| tbl-cap: "Supplemental Table 6: Association between TyHGB and mortality excluding events within the first 24 months"
 
-# Lọc bỏ tử vong trong 24 tháng đầu
-df_sens <- df_final %>% filter(time_months > 24) %>% mutate(TyHGB_Q_num = as.numeric(TyHGB_Q))
-des_sens <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_sens)
+# 1. BÙA CHÚ CHỐNG LỖI "ONLY ONE PSU" CỦA NHANES
+options(survey.lonely.psu = "adjust")
+
+df_final <- df_final %>% mutate(TyHGB_Q_num = as.numeric(TyHGB_Q))
+
+# 2. TẠO DESIGN GỐC TRƯỚC, KHÔNG FILTER DATA THÔ
+des_full <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
+
+# 3. DÙNG HÀM SUBSET ĐỂ CẮT DATA AN TOÀN (Giữ nguyên cấu trúc Stratum của CDC)
+des_sens <- subset(des_full, time_months > 24)
 
 mods <- list("Model 1" = "", "Model 2" = "+ RIDAGEYR + RIAGENDR", "Model 3" = paste("+", covs_str))
 
@@ -1493,17 +1518,26 @@ run_sens_model <- function(event_var, outcome_name) {
     fit_cont <- svycoxph(f_cont, design = des_sens)
     sm_cont <- summary(fit_cont)
     hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB", 1], sm_cont$conf.int["TyHGB", 3], sm_cont$conf.int["TyHGB", 4])
-    p_cont <- ifelse(sm_cont$coef["TyHGB", 5] < 0.001, "<0.001", sprintf("%.3f", sm_cont$coef["TyHGB", 5]))
+    
+    # P-VALUE LIÊN TỤC
+    p_val_cont <- sm_cont$coef["TyHGB", "Pr(>|z|)"]
+    p_cont <- ifelse(p_val_cont < 0.001, "<0.001", sprintf("%.3f", p_val_cont))
     
     # Quartiles
     f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods[[m]]))
     fit_q <- svycoxph(f_q, design = des_sens)
     sm_q <- summary(fit_q)
     
+    # P-VALUE QUARTILES
+    p_q2 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ2", "Pr(>|z|)"])
+    p_q3 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ3", "Pr(>|z|)"])
+    p_q4 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ4", "Pr(>|z|)"])
+    
     # P for trend
     f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods[[m]]))
     fit_trend <- svycoxph(f_trend, design = des_sens)
-    p_trend <- ifelse(summary(fit_trend)$coef["TyHGB_Q_num", 5] < 0.001, "<0.001", sprintf("%.3f", summary(fit_trend)$coef["TyHGB_Q_num", 5]))
+    p_val_trend <- summary(fit_trend)$coef["TyHGB_Q_num", "Pr(>|z|)"]
+    p_trend <- ifelse(p_val_trend < 0.001, "<0.001", sprintf("%.3f", p_val_trend))
     
     res_list[[length(res_list)+1]] <- data.frame(
       Outcome = outcome_name, TyHGB = c("Continuous", "Q1", "Q2", "Q3", "Q4", "P for trend"),
@@ -1512,8 +1546,7 @@ run_sens_model <- function(event_var, outcome_name) {
                         sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ2", 1], sm_q$conf.int["TyHGB_QQ2", 3], sm_q$conf.int["TyHGB_QQ2", 4]),
                         sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ3", 1], sm_q$conf.int["TyHGB_QQ3", 3], sm_q$conf.int["TyHGB_QQ3", 4]),
                         sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ4", 1], sm_q$conf.int["TyHGB_QQ4", 3], sm_q$conf.int["TyHGB_QQ4", 4]), ""),
-      `P value` = c(p_cont, "-", 
-                    sprintf("%.3f", sm_q$coef["TyHGB_QQ2", 5]), sprintf("%.3f", sm_q$coef["TyHGB_QQ3", 5]), sprintf("%.3f", sm_q$coef["TyHGB_QQ4", 5]), p_trend),
+      `P value` = c(p_cont, "-", p_q2, p_q3, p_q4, p_trend),
       check.names = FALSE
     )
   }
@@ -1577,21 +1610,21 @@ get_mice_hr <- function(event_var, title) {
   B <- var(estimates)
   T_var <- U_bar + (1 + 1/5) * B
   
-  res_df <- rbind(res_df, data.frame(Imputation = "Pooled (Rubin's Rules)", HR = exp(Q_bar), 
+  res_df <- rbind(res_df, data.frame(Imputation = "Pooled", HR = exp(Q_bar), 
                                      LCI = exp(Q_bar - 1.96*sqrt(T_var)), UCI = exp(Q_bar + 1.96*sqrt(T_var))))
   res_df$Imputation <- factor(res_df$Imputation, levels = rev(res_df$Imputation))
   
   ggplot(res_df, aes(x = HR, y = Imputation)) +
     geom_vline(xintercept = 1, linetype = "dashed", color = "black") +
     geom_errorbarh(aes(xmin = LCI, xmax = UCI), height = 0.2, color = "#0055A4", linewidth = 1) +
-    geom_point(size = 4, color = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", "#E64B35", "#0055A4"), 
-               shape = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", 18, 16)) +
+    geom_point(size = 4, color = ifelse(res_df$Imputation == "Pooled", "#E64B35", "#0055A4"), 
+               shape = ifelse(res_df$Imputation == "Pooled", 18, 16)) +
     theme_classic() + labs(title = title, x = "Hazard Ratio (95% CI)", y = "") +
     theme(plot.title = element_text(face = "bold"), axis.text = element_text(size = 11, color="black", face="bold"))
 }
 
-p_mice_acm <- get_mice_hr("status_acm", "A. ACM Models Stability")
-p_mice_cvm <- get_mice_hr("status_cvm", "B. CVM Models Stability")
+p_mice_acm <- get_mice_hr("status_acm", "A. ACM Models")
+p_mice_cvm <- get_mice_hr("status_cvm", "B. CVM Models")
 
 p_mice_acm | p_mice_cvm
 ```
@@ -1604,44 +1637,106 @@ p_mice_acm | p_mice_cvm
 #| fig-width: 14
 #| fig-height: 6
 
-# Cài package EValue nếu chưa có: install.packages("EValue")
-library(EValue)
+library(ggplot2)
+library(dplyr)
+library(patchwork)
+library(survey)
+library(survival)
 
-plot_evalue <- function(event_var, title) {
-  # Lấy HR và LCI của mô hình 3
-  fit <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = masld_design)
-  hr <- exp(coef(fit)["TyHGB"])
-  lci <- exp(coef(fit)["TyHGB"] - 1.96*sqrt(vcov(fit)["TyHGB", "TyHGB"]))
-  
-  # Tính E-value
-  ev <- evalues.HR(estimate = hr, lo = lci, hi = NA, rare = TRUE)
-  e_point <- ev[2, "point"]
-  e_lower <- ev[2, "lower"]
-  
-  # Tạo data mô phỏng đường cong
-  rr_ud <- seq(1, max(e_point * 2, 5), length.out = 100)
-  rr_eu_point <- (hr * rr_ud - hr) / (rr_ud - hr)
-  rr_eu_lower <- (lci * rr_ud - lci) / (rr_ud - lci)
-  
-  df_curve <- data.frame(rr_ud = rr_ud, rr_eu_point = rr_eu_point, rr_eu_lower = rr_eu_lower) %>%
-    filter(rr_eu_point > 1 & rr_eu_point < max(rr_ud) & rr_eu_lower > 1)
-  
-  ggplot(df_curve, aes(x = rr_ud)) +
-    geom_line(aes(y = rr_eu_point, color = "Point Estimate"), linewidth = 1.2) +
-    geom_line(aes(y = rr_eu_lower, color = "Lower Confidence Limit"), linewidth = 1.2, linetype = "dashed") +
-    geom_point(aes(x = e_point, y = e_point), color = "#E64B35", size = 4) +
-    geom_point(aes(x = e_lower, y = e_lower), color = "#0055A4", size = 4) +
-    annotate("text", x = e_point + 0.3, y = e_point + 0.3, label = sprintf("E-value = %.2f", e_point), fontface="bold", color="#E64B35") +
-    annotate("text", x = e_lower + 0.3, y = e_lower + 0.3, label = sprintf("E-value (LCI) = %.2f", e_lower), fontface="bold", color="#0055A4") +
-    scale_color_manual(values = c("Point Estimate" = "#E64B35", "Lower Confidence Limit" = "#0055A4")) +
-    coord_cartesian(xlim = c(1, max(df_curve$rr_ud)*0.6), ylim = c(1, max(df_curve$rr_ud)*0.6)) +
-    labs(title = title, x = expression(bold(RR[UD])~"(Confounder-Outcome Effect)"), y = expression(bold(RR[EU])~"(Exposure-Confounder Effect)")) +
-    theme_bw() + theme(legend.position = c(0.75, 0.85), legend.title = element_blank(), 
-                       plot.title = element_text(face="bold"), legend.background = element_rect(color="black"))
+# TÍNH TOÁN THỦ CÔNG E-VALUE (Chuẩn hóa theo VanderWeele & Ding 2017)
+get_evalue <- function(est) {
+  if (is.na(est)) return(NA)
+  if (est < 1) est <- 1 / est
+  return(est + sqrt(est * (est - 1)))
 }
 
-p_ev_acm <- plot_evalue("status_acm", "A. E-value for All-Cause Mortality")
-p_ev_cvm <- plot_evalue("status_cvm", "B. E-value for Cardiovascular Mortality")
+get_evalue_ci <- function(est, limit) {
+  if (is.na(est) || is.na(limit)) return(NA)
+  if (est > 1 && limit <= 1) return(1)
+  if (est < 1 && limit >= 1) return(1)
+  if (limit < 1) limit <- 1 / limit
+  return(limit + sqrt(limit * (limit - 1)))
+}
+
+plot_evalue <- function(event_var, title) {
+  
+  # 1. Chạy mô hình
+  form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str))
+  fit <- svycoxph(form, design = masld_design)
+  
+  # 2. Lấy số liệu gốc từ Summary
+  sm <- summary(fit)
+  hr <- as.numeric(sm$conf.int["TyHGB", 1])
+  lci <- as.numeric(sm$conf.int["TyHGB", 3])
+  
+  # 3. Tính toán bằng công thức gốc
+  e_point <- get_evalue(hr)
+  e_lower <- get_evalue_ci(hr, lci)
+  
+  # 4. MÔ PHỎNG HÀM SỐ TOÁN HỌC
+  rr_eu <- seq(1.001, 20, length.out = 1000) 
+  
+  # Tính y (RR_UD) tương ứng
+  rr_ud_point <- (hr * rr_eu - hr) / (rr_eu - hr)
+  rr_ud_point <- ifelse(rr_eu > hr & rr_ud_point >= 1, rr_ud_point, NA)
+  
+  df_curve <- data.frame(rr_eu = rr_eu, rr_ud_point = rr_ud_point)
+  
+  if (e_lower > 1) {
+    rr_ud_lower <- (lci * rr_eu - lci) / (rr_eu - lci)
+    df_curve$rr_ud_lower <- ifelse(rr_eu > lci & rr_ud_lower >= 1, rr_ud_lower, NA)
+  }
+  
+  # BẢNG MÀU MỚI: Sang trọng, chuẩn tạp chí The Lancet (Deep Rose & Deep Teal)
+  col_point <- "#C2185B"  # Đỏ tía 
+  col_lower <- "#008080"  # Xanh cổ vịt 
+  
+  # Tạo "khung cửa sổ" zoom
+  axis_limit <- max(e_point * 2.2, e_lower * 3, 3.5) 
+  
+  # 5. Vẽ đồ thị
+  p <- ggplot(df_curve, aes(x = rr_eu)) +
+    # Đường E-value chính
+    geom_line(aes(y = rr_ud_point, color = "Point Estimate"), linewidth = 1.5, linetype = "solid", na.rm = TRUE)
+  
+  if (e_lower > 1) {
+    # Đường LCI
+    p <- p + geom_line(aes(y = rr_ud_lower, color = "Lower Confidence Limit"), linewidth = 1.5, linetype = "solid", na.rm = TRUE) +
+      geom_point(aes(x = e_lower, y = e_lower), color = col_lower, size = 4.5) +
+      # ÉP CHỮ LCI NẰM PHÍA DƯỚI (GẦN 0) BẰNG vjust = 1
+      annotate("text", x = e_lower + 0.08, y = e_lower - 0.12, 
+               label = sprintf("E-value (LCI) = %.2f", e_lower), 
+               fontface="bold", color=col_lower, size=4, hjust = 0, vjust = 1)
+  }
+  
+  p <- p + geom_point(aes(x = e_point, y = e_point), color = col_point, size = 4.5) +
+    # ÉP CHỮ E-VALUE NẰM PHÍA TRÊN BẰNG vjust = 0
+    annotate("text", x = e_point + 0.08, y = e_point + 0.08, 
+             label = sprintf("E-value = %.2f", e_point), 
+             fontface="bold", color=col_point, size=4, hjust = 0, vjust = 0) +
+    scale_color_manual(values = c("Point Estimate" = col_point, "Lower Confidence Limit" = col_lower)) +
+    # Cửa sổ hiển thị cắt mượt mà mọi đường thừa
+    coord_cartesian(xlim = c(1, axis_limit), ylim = c(1, axis_limit)) +
+    labs(title = title, 
+         x = expression(bold(RR[EU])~"(Exposure-Confounder Effect)"), 
+         y = expression(bold(RR[UD])~"(Confounder-Outcome Effect)")) +
+    # THEME CLASSIC (Trắng toát giống hình thầy)
+    theme_classic() + 
+    theme(legend.position = c(0.75, 0.85), 
+          legend.title = element_blank(), 
+          legend.text = element_text(face = "bold", size = 11),
+          plot.title = element_text(face="bold", size = 14), 
+          axis.title = element_text(face="bold", size = 12),
+          axis.text = element_text(color = "black", size = 11),
+          legend.background = element_rect(color="black", linewidth = 0.5),
+          panel.grid.minor = element_blank(),
+          panel.grid.major = element_blank())
+          
+  return(p)
+}
+
+p_ev_acm <- plot_evalue("status_acm", "A. All-Cause Mortality")
+p_ev_cvm <- plot_evalue("status_cvm", "B. Cardiovascular Mortality")
 
 p_ev_acm | p_ev_cvm
 ```
