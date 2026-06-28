@@ -1,5 +1,5 @@
 ---
-title: "Prognostic Value of TyHGB Index in Patients with MASLD"
+title: "Prognostic Value of Remnant Cholesterol (RC) in Patients with MASLD"
 author: An Tran
 date: last-modified
 format:
@@ -66,6 +66,9 @@ df_final <- df_imputed %>%
     is_masld = ifelse(steatosis == 1 & cm_risk == 1, 1, 0),
     
     TyHGB = (LBXTR / LBDHDD) + (0.7 * LBDSGLSI) + (0.1 * BMXBMI),
+    # TÍNH TOÁN BIẾN MỚI TyHGB x WBC
+    TyWBC = TyHGB * LBXWBCSI,
+    
     ABSI = BMXWAIST / ((BMXBMI^(2/3)) * (BMXHT^(1/2))),
     WWI = BMXWAIST / sqrt(BMXWT),
     WHtR = BMXWAIST / BMXHT,
@@ -76,7 +79,7 @@ df_final <- df_imputed %>%
   ) %>%
   filter(is_masld == 1, (is.na(RIDEXPRG) | RIDEXPRG != 1), !is.na(mortstat), !is.na(time_months), eligstat == 1) %>%
   mutate(
-    TyHGB_Q = factor(ntile(TyHGB, 4), labels = c("Q1", "Q2", "Q3", "Q4")),
+    TyWBC_Q = factor(ntile(TyWBC, 4), labels = c("Q1", "Q2", "Q3", "Q4")),
     status_acm_factor = factor(status_acm),
     status_cvm_factor = factor(status_cvm),
     event_cr = case_when(mortstat == 0 ~ 0, status_cvm == 1 ~ 1, mortstat == 1 & status_cvm == 0 ~ 2)
@@ -113,27 +116,26 @@ masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR
 covs_m2 <- "RIDAGEYR + RIAGENDR + RIDRETH1"
 covs_m3 <- paste(covs_m2, "+ DMDEDUC2 + INDFMPIR")
 covs_m4 <- paste(covs_m3, "+ BMXBMI + diabetes + hyperten + cvd_hx")
-covs_str <- covs_m4 # Gán biến toàn cục cho các phân tích sau
+covs_str <- covs_m4
 ```
 
-## 1. Baseline characteristics of the study population
+## 1. Baseline characteristics
 
 ```{r}
 #| label: tbl-baseline
-#| tbl-cap: "Table 1: Baseline characteristics of the study population according to TyHGB quartiles"
+#| tbl-cap: "Table 1: Baseline characteristics of the study population according to TyHGB-WBC quartiles"
 
 vars_table1 <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "DMDEDUC2", "DMDMARTL", "INDFMPIR",
-                 "BMXBMI", "BMXWAIST", "TyHGB", "ABSI", "WWI", "WHtR", 
+                 "BMXBMI", "BMXWAIST", "TyWBC", "TyHGB", "ABSI", "WWI", "WHtR", 
                  "LBXTC", "LBXTR", "LBDHDD", "LBDSGLSI", "LBXSATSI", "LBXSASSI",
                  "LBXWBCSI", "LBXLYPCT", "LBXMOPCT", "LBXNEPCT", "LBXEOPCT", "LBXBAPCT",
                  "LBDLYMNO", "LBDMONO", "LBDNENO", "LBDEONO", "LBDBANO",
-                 "LBXRBCSI", "LBXHGB", "LBXHCT", "LBXWBCSI", "LBDLYMNO", "LBDMONO", "LBDNENO",
-                 "LBDEONO", "LBDBANO", "LBXRBCSI", "LBXHGB", "LBXHCT",
-                 "diabetes", "hyperten", "cvd_hx", "status_acm_factor", "status_cvm_factor")
+                 "LBXRBCSI", "LBXHGB", "LBXHCT", "diabetes", "hyperten", "cvd_hx", 
+                 "status_acm_factor", "status_cvm_factor")
 
 tab1_gt <- masld_design %>%
   tbl_svysummary(
-    by = TyHGB_Q, 
+    by = TyWBC_Q, 
     include = all_of(vars_table1),
     statistic = list(
       all_continuous() ~ "{mean} ({sd})", 
@@ -144,7 +146,6 @@ tab1_gt <- masld_design %>%
       all_categorical() ~ c(0, 1)
     ), 
     missing = "no",
-    
     label = list(
       RIDAGEYR ~ "Age (years)",
       RIAGENDR ~ "Gender",
@@ -152,21 +153,19 @@ tab1_gt <- masld_design %>%
       DMDEDUC2 ~ "Education level",
       DMDMARTL ~ "Marital status",
       INDFMPIR ~ "Family income to poverty",
-      
       BMXBMI   ~ "Body mass index (kg/m²)",
       BMXWAIST ~ "Waist circumference (cm)",
+      TyWBC    ~ "TyHGB-WBC Index",
       TyHGB    ~ "TyHGB",
       ABSI     ~ "A Body Shape Index (ABSI)",
       WWI      ~ "Weight-Adjusted Waist Index (WWI)",
       WHtR     ~ "Waist-to-Height Ratio (WHtR)",
-      
       LBXTC    ~ "Total cholesterol (mg/dL)",
       LBXTR    ~ "Triglycerides (mg/dL)",
       LBDHDD   ~ "HDL-cholesterol (mg/dL)",
       LBDSGLSI ~ "Fasting glucose (mmol/L)",
       LBXSATSI ~ "Alanine aminotransferase (ALT, U/L)",
       LBXSASSI ~ "Aspartate aminotransferase (AST, U/L)",
-      
       LBXWBCSI ~ "WBC (1000 cells/μL)",
       LBDLYMNO ~ "Lymphocytes (1000 cells/μL)",
       LBDMONO  ~ "Monocytes (1000 cells/μL)",
@@ -176,14 +175,12 @@ tab1_gt <- masld_design %>%
       LBXRBCSI ~ "RBC (million cells/μL)",
       LBXHGB   ~ "Hemoglobin (g/dL)",
       LBXHCT   ~ "Hematocrit (%)",
-      
       diabetes ~ "Diabetes",
       hyperten ~ "Hypertension",
       cvd_hx   ~ "History of cardiovascular disease",
       status_acm_factor ~ "All-cause mortality",
       status_cvm_factor ~ "Cardiovascular mortality"
     )
-    
   ) %>%
   add_p() %>% 
   add_overall() %>%
@@ -196,46 +193,42 @@ tab1_gt <- masld_design %>%
 tab1_gt
 ```
 
-## 2. Univariate and multivariate Cox regression
+## 2. Univariate and Multivariate Cox regression
 
 ```{r}
 #| label: tbl-cox
-#| tbl-cap: "Table 2: Cox regression analysis (stepwise models) for TyHGB and other indices"
+#| tbl-cap: "Table 2: Cox regression analysis (stepwise models) for TyHGB-WBC and other indices"
 
 df_final <- df_final %>%
   mutate(
-    TyHGB_Z = as.numeric(scale(TyHGB)),
+    TyWBC_Z = as.numeric(scale(TyWBC)),
     ABSI_Z  = as.numeric(scale(ABSI)),
     WWI_Z   = as.numeric(scale(WWI)),
     WHtR_Z  = as.numeric(scale(WHtR))
   )
 masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
 
-markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
+markers <- c("TyWBC_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
 
 get_independent_res <- function(outcome, marker) {
-  # Model 1
   f_m1 <- paste0("Surv(time_months, ", outcome, ") ~ ", marker)
   fit_m1 <- suppressWarnings(svycoxph(as.formula(f_m1), design = masld_design))
   res_m1 <- tidy(fit_m1, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
   hr_m1 <- sprintf("%.3f (%.3f-%.3f)", res_m1$estimate, res_m1$conf.low, res_m1$conf.high)
   p_m1 <- ifelse(res_m1$p.value < 0.001, "<0.001", sprintf("%.3f", res_m1$p.value))
   
-  # Model 2
   f_m2 <- paste0("Surv(time_months, ", outcome, ") ~ ", marker, " + ", covs_m2)
   fit_m2 <- suppressWarnings(svycoxph(as.formula(f_m2), design = masld_design))
   res_m2 <- tidy(fit_m2, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
   hr_m2 <- sprintf("%.3f (%.3f-%.3f)", res_m2$estimate, res_m2$conf.low, res_m2$conf.high)
   p_m2 <- ifelse(res_m2$p.value < 0.001, "<0.001", sprintf("%.3f", res_m2$p.value))
   
-  # Model 3
   f_m3 <- paste0("Surv(time_months, ", outcome, ") ~ ", marker, " + ", covs_m3)
   fit_m3 <- suppressWarnings(svycoxph(as.formula(f_m3), design = masld_design))
   res_m3 <- tidy(fit_m3, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
   hr_m3 <- sprintf("%.3f (%.3f-%.3f)", res_m3$estimate, res_m3$conf.low, res_m3$conf.high)
   p_m3 <- ifelse(res_m3$p.value < 0.001, "<0.001", sprintf("%.3f", res_m3$p.value))
   
-  # Model 4
   f_m4 <- paste0("Surv(time_months, ", outcome, ") ~ ", marker, " + ", covs_m4)
   fit_m4 <- suppressWarnings(svycoxph(as.formula(f_m4), design = masld_design))
   res_m4 <- tidy(fit_m4, exponentiate = TRUE, conf.int = TRUE) %>% filter(term == marker)
@@ -275,10 +268,7 @@ table_cox_new <- bind_rows(results_list) %>%
     M3_HR = md("**HR (95% CIs)**"), M3_P = md("**p-value**"),
     M4_HR = md("**HR (95% CIs)**"), M4_P = md("**p-value**")
   ) %>%
-  tab_options(
-    row_group.font.weight = "bold", row_group.background.color = "#E8E8E8",
-    column_labels.font.weight = "bold", table.border.top.color = "black", table.border.bottom.color = "black"
-  )
+  tab_options(row_group.font.weight = "bold", row_group.background.color = "#E8E8E8", column_labels.font.weight = "bold", table.border.top.color = "black", table.border.bottom.color = "black")
 table_cox_new
 ```
 
@@ -290,15 +280,15 @@ table_cox_new
 #| fig-width: 18
 #| fig-height: 10
 
-cox_acm_m1 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB +", covs_str)), design = masld_design)
-cox_acm_m2 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB + ABSI +", covs_str)), design = masld_design)
-cox_acm_m3 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB + WWI +", covs_str)), design = masld_design)
-cox_acm_m4 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyHGB + WHtR +", covs_str)), design = masld_design)
+cox_acm_m1 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyWBC +", covs_str)), design = masld_design)
+cox_acm_m2 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyWBC + ABSI +", covs_str)), design = masld_design)
+cox_acm_m3 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyWBC + WWI +", covs_str)), design = masld_design)
+cox_acm_m4 <- svycoxph(as.formula(paste("Surv(time_months, status_acm) ~ TyWBC + WHtR +", covs_str)), design = masld_design)
 
-cox_cvm_m1 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyHGB +", covs_str)), design = masld_design)
-cox_cvm_m2 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyHGB + ABSI +", covs_str)), design = masld_design)
-cox_cvm_m3 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyHGB + WWI +", covs_str)), design = masld_design)
-cox_cvm_m4 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyHGB + WHtR +", covs_str)), design = masld_design)
+cox_cvm_m1 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyWBC +", covs_str)), design = masld_design)
+cox_cvm_m2 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyWBC + ABSI +", covs_str)), design = masld_design)
+cox_cvm_m3 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyWBC + WWI +", covs_str)), design = masld_design)
+cox_cvm_m4 <- svycoxph(as.formula(paste("Surv(time_months, status_cvm) ~ TyWBC + WHtR +", covs_str)), design = masld_design)
 
 df_final <- df_final %>%
   mutate(
@@ -339,15 +329,15 @@ combine_km <- function(km_obj) {
   (km_obj$plot / km_obj$table) + plot_layout(heights = c(3, 1))
 }
 
-pw_acm1 <- combine_km(create_km("Q_acm_m1", "status_acm", "TyHGB"))
-pw_acm2 <- combine_km(create_km("Q_acm_m2", "status_acm", "TyHGB_ABSI"))
-pw_acm3 <- combine_km(create_km("Q_acm_m3", "status_acm", "TyHGB_WWI"))
-pw_acm4 <- combine_km(create_km("Q_acm_m4", "status_acm", "TyHGB_WHtR"))
+pw_acm1 <- combine_km(create_km("Q_acm_m1", "status_acm", "TyHGB-WBC"))
+pw_acm2 <- combine_km(create_km("Q_acm_m2", "status_acm", "TyWBC_ABSI"))
+pw_acm3 <- combine_km(create_km("Q_acm_m3", "status_acm", "TyWBC_WWI"))
+pw_acm4 <- combine_km(create_km("Q_acm_m4", "status_acm", "TyWBC_WHtR"))
 
-pw_cvm1 <- combine_km(create_km("Q_cvm_m1", "status_cvm", "TyHGB"))
-pw_cvm2 <- combine_km(create_km("Q_cvm_m2", "status_cvm", "TyHGB_ABSI"))
-pw_cvm3 <- combine_km(create_km("Q_cvm_m3", "status_cvm", "TyHGB_WWI"))
-pw_cvm4 <- combine_km(create_km("Q_cvm_m4", "status_cvm", "TyHGB_WHtR"))
+pw_cvm1 <- combine_km(create_km("Q_cvm_m1", "status_cvm", "TyHGB-WBC"))
+pw_cvm2 <- combine_km(create_km("Q_cvm_m2", "status_cvm", "TyWBC_ABSI"))
+pw_cvm3 <- combine_km(create_km("Q_cvm_m3", "status_cvm", "TyWBC_WWI"))
+pw_cvm4 <- combine_km(create_km("Q_cvm_m4", "status_cvm", "TyWBC_WHtR"))
 
 final_plot <- (pw_acm1 | pw_acm2 | pw_acm3 | pw_acm4) / (pw_cvm1 | pw_cvm2 | pw_cvm3 | pw_cvm4)
 final_plot
@@ -391,10 +381,10 @@ plot_roc <- function(r1, r2, r3, r4, time_idx, title) {
     FPR = c(d1$FP[,time_idx], d2$FP[,time_idx], d3$FP[,time_idx], d4$FP[,time_idx]),
     TPR = c(d1$TP[,time_idx], d2$TP[,time_idx], d3$TP[,time_idx], d4$TP[,time_idx]),
     Model = c(
-      rep(paste0("TyHGB (AUC=", round(d1$AUC[time_idx], 3), ")"), length(d1$FP[,time_idx])),
-      rep(paste0("TyHGB+ABSI (AUC=", round(d2$AUC[time_idx], 3), ")"), length(d2$FP[,time_idx])),
-      rep(paste0("TyHGB+WWI (AUC=", round(d3$AUC[time_idx], 3), ")"), length(d3$FP[,time_idx])),
-      rep(paste0("TyHGB+WHtR (AUC=", round(d4$AUC[time_idx], 3), ")"), length(d4$FP[,time_idx]))
+      rep(paste0("TyHGB-WBC (AUC=", round(d1$AUC[time_idx], 3), ")"), length(d1$FP[,time_idx])),
+      rep(paste0("TyWBC+ABSI (AUC=", round(d2$AUC[time_idx], 3), ")"), length(d2$FP[,time_idx])),
+      rep(paste0("TyWBC+WWI (AUC=", round(d3$AUC[time_idx], 3), ")"), length(d3$FP[,time_idx])),
+      rep(paste0("TyWBC+WHtR (AUC=", round(d4$AUC[time_idx], 3), ")"), length(d4$FP[,time_idx]))
     )
   )
   
@@ -425,125 +415,123 @@ final_roc_plot
 ## 5. Incremental predictive value
 
 ```{r}
-# #| label: tbl-incremental
-# #| tbl-cap: "Table 3: Incremental predictive value of adding indices to the base model"
-# 
-# get_c_ci <- function(time_var, event_var, lp_var, weights_var) {
-#   c_obj <- concordance(Surv(time_var, event_var) ~ lp_var, weights = weights_var)
-#   c_val <- ifelse(c_obj$concordance < 0.5, 1 - c_obj$concordance, c_obj$concordance)
-#   se <- sqrt(c_obj$var)
-#   lower <- c_val - 1.96 * se
-#   upper <- c_val + 1.96 * se
-#   return(list(c_str = paste0(sprintf("%.3f", c_val), " (", sprintf("%.3f", lower), "-", sprintf("%.3f", upper), ")"),
-#               c_val = c_val, se = se))
-# }
-# 
-# compare_models <- function(time_var, event_var, event_cr_var, lp_base, lp_new, weights_var, t0, is_cvm) {
-# 
-#   base_c <- get_c_ci(time_var, event_var, lp_base, weights_var)
-#   new_c  <- get_c_ci(time_var, event_var, lp_new, weights_var)
-# 
-#   if(is_cvm) {
-#     roc_base <- timeROC(T=time_var, delta=event_cr_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
-#     roc_new  <- timeROC(T=time_var, delta=event_cr_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
-#   } else {
-#     roc_base <- timeROC(T=time_var, delta=event_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
-#     roc_new  <- timeROC(T=time_var, delta=event_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
-#   }
-# 
-#   comp_res <- compare(roc_new, roc_base, adjusted=FALSE)
-#   p_delong <- if(!is.null(comp_res$p_values_AUC)) comp_res$p_values_AUC[1] else comp_res$p_values_AUC_1[1]
-# 
-#   if(is.na(p_delong)) {
-#     se_diff <- sqrt(base_c$se^2 + new_c$se^2)
-#     if (se_diff == 0) se_diff <- 1e-6
-#     z_stat <- abs(new_c$c_val - base_c$c_val) / se_diff
-#     p_delong <- 2 * (1 - pnorm(z_stat))
-#   }
-# 
-#   indata_df <- data.frame(time = time_var, status = event_var)
-# 
-#   set.seed(123)
-#   idi_res <- IDI.INF(indata_df, covs0 = as.matrix(lp_base), covs1 = as.matrix(lp_new), t0 = t0, npert = 100)
-#   out_matrix <- IDI.INF.OUT(idi_res)
-# 
-#   idi_str <- paste0(sprintf("%.3f", out_matrix[1, 1]), " (", sprintf("%.3f", out_matrix[1, 2]), "-", sprintf("%.3f", out_matrix[1, 3]), ")")
-#   idi_p   <- out_matrix[1, 4]
-# 
-#   nri_str <- paste0(sprintf("%.3f", out_matrix[3, 1]), " (", sprintf("%.3f", out_matrix[3, 2]), "-", sprintf("%.3f", out_matrix[3, 3]), ")")
-#   nri_p   <- out_matrix[3, 4]
-# 
-#   return(list(c_new = new_c$c_str, p_delong = p_delong, nri = nri_str, p_nri = nri_p, idi = idi_str, p_idi = idi_p))
-# }
-# 
-# run_all_comparisons <- function(time_var, event_var, event_cr_var, lp_m1, lp_m2, lp_m3, lp_m4, weights_var, t0 = 120, is_cvm = FALSE, outcome_name) {
-#   cat(paste("\n================ KẾT QUẢ CHO:", outcome_name, "================\n"))
-# 
-#   c_base_str <- get_c_ci(time_var, event_var, lp_m1, weights_var)$c_str
-#   cat(sprintf("Mô hình gốc (TyHGB) - C-index: %s\n\n", c_base_str))
-# 
-#   cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
-#               "Model so sánh", "C-index New (95%CI)", "P DeLong", "Cont. NRI (95%CI)", "P (NRI)", "IDI (95%CI)", "P (IDI)"))
-#   cat(strrep("-", 108), "\n")
-# 
-#   models <- list(
-#     list(name = "TyHGB+ABSI", lp = lp_m2),
-#     list(name = "TyHGB+WWI",  lp = lp_m3),
-#     list(name = "TyHGB+WHtR", lp = lp_m4)
-#   )
-# 
-#   for (m in models) {
-#     res <- compare_models(time_var, event_var, event_cr_var, lp_m1, m$lp, weights_var, t0, is_cvm)
-#     p_dl_print <- ifelse(res$p_delong < 0.001, "<0.001", sprintf("%.4f", res$p_delong))
-#     p_nri_print <- ifelse(res$p_nri < 0.001, "<0.001", sprintf("%.4f", res$p_nri))
-#     p_idi_print <- ifelse(res$p_idi < 0.001, "<0.001", sprintf("%.4f", res$p_idi))
-# 
-#     cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
-#                 m$name, res$c_new, p_dl_print, res$nri, p_nri_print, res$idi, p_idi_print))
-#   }
-#   cat("\n")
-# }
-# 
-# cat("Đang xử lý Bootstrap 100 vòng. Sẽ mất vài phút...\n")
-# 
-# run_all_comparisons(
-#   time_var     = df_final$time_months,
-#   event_var    = df_final$status_acm,
-#   event_cr_var = df_final$status_acm,
-#   lp_m1        = df_final$lp_acm_m1,
-#   lp_m2        = df_final$lp_acm_m2,
-#   lp_m3        = df_final$lp_acm_m3,
-#   lp_m4        = df_final$lp_acm_m4,
-#   weights_var  = df_final$WTSAF2YR,
-#   t0           = 120,
-#   is_cvm       = FALSE,
-#   outcome_name = "ALL-CAUSE MORTALITY (ACM) TẠI 10 NĂM"
-# )
-# 
-# run_all_comparisons(
-#   time_var     = df_final$time_months,
-#   event_var    = df_final$status_cvm,
-#   event_cr_var = df_final$event_cr,
-#   lp_m1        = df_final$lp_cvm_m1,
-#   lp_m2        = df_final$lp_cvm_m2,
-#   lp_m3        = df_final$lp_cvm_m3,
-#   lp_m4        = df_final$lp_cvm_m4,
-#   weights_var  = df_final$WTSAF2YR,
-#   t0           = 120,
-#   is_cvm       = TRUE,
-#   outcome_name = "CARDIOVASCULAR MORTALITY (CVM) TẠI 10 NĂM"
-# )
+#| label: tbl-incremental
+#| tbl-cap: "Table 3: Incremental predictive value of adding indices to the base TyHGB-WBC model"
+
+get_c_ci <- function(time_var, event_var, lp_var, weights_var) {
+  c_obj <- concordance(Surv(time_var, event_var) ~ lp_var, weights = weights_var)
+  c_val <- ifelse(c_obj$concordance < 0.5, 1 - c_obj$concordance, c_obj$concordance)
+  se <- sqrt(c_obj$var)
+  lower <- c_val - 1.96 * se
+  upper <- c_val + 1.96 * se
+  return(list(c_str = paste0(sprintf("%.3f", c_val), " (", sprintf("%.3f", lower), "-", sprintf("%.3f", upper), ")"), 
+              c_val = c_val, se = se))
+}
+
+compare_models <- function(time_var, event_var, event_cr_var, lp_base, lp_new, weights_var, t0, is_cvm) {
+  
+  base_c <- get_c_ci(time_var, event_var, lp_base, weights_var)
+  new_c  <- get_c_ci(time_var, event_var, lp_new, weights_var)
+  
+  if(is_cvm) { 
+    roc_base <- timeROC(T=time_var, delta=event_cr_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+    roc_new  <- timeROC(T=time_var, delta=event_cr_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+  } else {
+    roc_base <- timeROC(T=time_var, delta=event_var, marker=lp_base, cause=1, weighting="marginal", times=t0, iid=TRUE)
+    roc_new  <- timeROC(T=time_var, delta=event_var, marker=lp_new, cause=1, weighting="marginal", times=t0, iid=TRUE)
+  }
+  
+  comp_res <- compare(roc_new, roc_base, adjusted=FALSE)
+  p_delong <- if(!is.null(comp_res$p_values_AUC)) comp_res$p_values_AUC[1] else comp_res$p_values_AUC_1[1]
+  
+  if(is.na(p_delong)) {
+    se_diff <- sqrt(base_c$se^2 + new_c$se^2)
+    if (se_diff == 0) se_diff <- 1e-6 
+    z_stat <- abs(new_c$c_val - base_c$c_val) / se_diff
+    p_delong <- 2 * (1 - pnorm(z_stat))
+  }
+  
+  indata_df <- data.frame(time = time_var, status = event_var)
+  
+  set.seed(123)
+  idi_res <- IDI.INF(indata_df, covs0 = as.matrix(lp_base), covs1 = as.matrix(lp_new), t0 = t0, npert = 100) 
+  out_matrix <- IDI.INF.OUT(idi_res)
+  
+  idi_str <- paste0(sprintf("%.3f", out_matrix[1, 1]), " (", sprintf("%.3f", out_matrix[1, 2]), "-", sprintf("%.3f", out_matrix[1, 3]), ")")
+  idi_p   <- out_matrix[1, 4]
+  
+  nri_str <- paste0(sprintf("%.3f", out_matrix[3, 1]), " (", sprintf("%.3f", out_matrix[3, 2]), "-", sprintf("%.3f", out_matrix[3, 3]), ")")
+  nri_p   <- out_matrix[3, 4]
+  
+  return(list(c_new = new_c$c_str, p_delong = p_delong, nri = nri_str, p_nri = nri_p, idi = idi_str, p_idi = idi_p))
+}
+
+run_all_comparisons <- function(time_var, event_var, event_cr_var, lp_m1, lp_m2, lp_m3, lp_m4, weights_var, t0 = 120, is_cvm = FALSE, outcome_name) {
+  cat(paste("\n================ KẾT QUẢ CHO:", outcome_name, "================\n"))
+  
+  c_base_str <- get_c_ci(time_var, event_var, lp_m1, weights_var)$c_str
+  cat(sprintf("Mô hình gốc (TyWBC) - C-index: %s\n\n", c_base_str))
+  
+  cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+              "Model so sánh", "C-index New (95%CI)", "P DeLong", "Cont. NRI (95%CI)", "P (NRI)", "IDI (95%CI)", "P (IDI)"))
+  cat(strrep("-", 108), "\n")
+  
+  models <- list(
+    list(name = "TyWBC+ABSI", lp = lp_m2),
+    list(name = "TyWBC+WWI",  lp = lp_m3),
+    list(name = "TyWBC+WHtR", lp = lp_m4)
+  )
+  
+  for (m in models) {
+    res <- compare_models(time_var, event_var, event_cr_var, lp_m1, m$lp, weights_var, t0, is_cvm)
+    p_dl_print <- ifelse(res$p_delong < 0.001, "<0.001", sprintf("%.4f", res$p_delong))
+    p_nri_print <- ifelse(res$p_nri < 0.001, "<0.001", sprintf("%.4f", res$p_nri))
+    p_idi_print <- ifelse(res$p_idi < 0.001, "<0.001", sprintf("%.4f", res$p_idi))
+    
+    cat(sprintf("%-12s | %-19s | %-8s | %-19s | %-8s | %-19s | %-8s\n",
+                m$name, res$c_new, p_dl_print, res$nri, p_nri_print, res$idi, p_idi_print))
+  }
+  cat("\n")
+}
+
+run_all_comparisons(
+  time_var     = df_final$time_months, 
+  event_var    = df_final$status_acm, 
+  event_cr_var = df_final$status_acm,     
+  lp_m1        = df_final$lp_acm_m1,      
+  lp_m2        = df_final$lp_acm_m2, 
+  lp_m3        = df_final$lp_acm_m3, 
+  lp_m4        = df_final$lp_acm_m4, 
+  weights_var  = df_final$WTSAF2YR,
+  t0           = 120, 
+  is_cvm       = FALSE, 
+  outcome_name = "ALL-CAUSE MORTALITY (ACM) TẠI 10 NĂM"
+)
+
+run_all_comparisons(
+  time_var     = df_final$time_months, 
+  event_var    = df_final$status_cvm, 
+  event_cr_var = df_final$event_cr,       
+  lp_m1        = df_final$lp_cvm_m1,      
+  lp_m2        = df_final$lp_cvm_m2, 
+  lp_m3        = df_final$lp_cvm_m3, 
+  lp_m4        = df_final$lp_cvm_m4, 
+  weights_var  = df_final$WTSAF2YR,
+  t0           = 120, 
+  is_cvm       = TRUE, 
+  outcome_name = "CARDIOVASCULAR MORTALITY (CVM) TẠI 10 NĂM"
+)
 ```
 
 ## 6. Dose-response relationship
 
 ```{r}
 #| label: fig-rcs
-#| fig-cap: "Figure 3: Restricted cubic spline (RCS) curves showing the dose-response relationship between TyHGB index and mortality"
+#| fig-cap: "Figure 3: Restricted cubic spline (RCS) curves showing the dose-response relationship between TyHGB-WBC index and mortality"
 #| fig-width: 16
 #| fig-height: 7
 
-rcs_vars <- c("time_months", "status_acm", "status_cvm", "TyHGB", 
+rcs_vars <- c("time_months", "status_acm", "status_cvm", "TyWBC", 
               "RIDAGEYR", "RIAGENDR", "RIDRETH1", "INDFMPIR", 
               "DMDEDUC2", "DMDMARTL", "diabetes", "hyperten", "cvd_hx", "BMXBMI", "WTSAF2YR")
 
@@ -552,44 +540,42 @@ dd <- datadist(df_rcs)
 options(datadist = "dd")
 
 plot_rcs_exact_style <- function(event_var, title_str) {
-  form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ rcs(TyHGB, 4) +", covs_str))
+  form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ rcs(TyWBC, 4) +", covs_str))
   fit <- cph(form, data = df_rcs, x = TRUE, y = TRUE, weights = df_rcs$WTSAF2YR)
   
   anv <- anova(fit)
-  p_overall <- anv["TyHGB", "P"]
+  p_overall <- anv["TyWBC", "P"]
   p_nonlin  <- anv[" Nonlinear", "P"] 
   
   p_overall_str <- ifelse(p_overall < 0.001, "< 0.001", sprintf("%.3f", p_overall))
   p_nonlin_str  <- ifelse(p_nonlin < 0.001, "< 0.001", sprintf("%.3f", p_nonlin))
-  knots_array <- fit$Design$parms$TyHGB
+  knots_array <- fit$Design$parms$TyWBC
   knots_str <- paste(round(knots_array, 2), collapse = ", ")
   
   anno_text <- paste0("P-overall ", ifelse(p_overall < 0.001, "", "= "), p_overall_str, "\n",
                       "P-non-linear ", ifelse(p_nonlin < 0.001, "", "= "), p_nonlin_str, "\n",
                       "Knots: ", knots_str)
   
-  # FIX LỖI TẠI ĐÂY: Gọi đích danh hàm Predict của thư viện rms
-  pred <- rms::Predict(fit, TyHGB, fun = exp, ref.zero = TRUE)
+  pred <- rms::Predict(fit, TyWBC, fun = exp, ref.zero = TRUE)
   df_pred <- as.data.frame(pred)
-  
-  min_x <- min(df_rcs$TyHGB, na.rm = TRUE)
-  max_x <- quantile(df_rcs$TyHGB, 0.99, na.rm = TRUE) 
+  min_x <- min(df_rcs$TyWBC, na.rm = TRUE)
+  max_x <- quantile(df_rcs$TyWBC, 0.99, na.rm = TRUE) 
   upper_limit_y <- 1.5
-  max_dens <- max(density(df_rcs$TyHGB, na.rm = TRUE)$y)
+  max_dens <- max(density(df_rcs$TyWBC, na.rm = TRUE)$y)
   scale_factor <- max_dens / (upper_limit_y * 0.5) 
   df_knots <- data.frame(k = knots_array)
  
   p <- ggplot() +
-    geom_histogram(data = df_rcs, aes(x = TyHGB, y = after_stat(density) / scale_factor), bins = 60, fill = "lightblue", color = "white", alpha = 0.9) +
-    geom_line(data = df_pred, aes(x = TyHGB, y = lower), color = "black", linewidth = 1.5) +
-    geom_line(data = df_pred, aes(x = TyHGB, y = upper), color = "black", linewidth = 1.5) +
-    geom_line(data = df_pred, aes(x = TyHGB, y = yhat), color = "red", linewidth = 1) +
+    geom_histogram(data = df_rcs, aes(x = TyWBC, y = after_stat(density) / scale_factor), bins = 60, fill = "lightblue", color = "white", alpha = 0.9) +
+    geom_line(data = df_pred, aes(x = TyWBC, y = lower), color = "black", linewidth = 1.5) +
+    geom_line(data = df_pred, aes(x = TyWBC, y = upper), color = "black", linewidth = 1.5) +
+    geom_line(data = df_pred, aes(x = TyWBC, y = yhat), color = "red", linewidth = 1) +
     geom_segment(data = df_knots, aes(x = k, xend = k, y = 0, yend = upper_limit_y * 0.02), color = "blue", linewidth = 1) +
     geom_hline(yintercept = 1, linetype = "dashed", color = "black", linewidth = 0.6) +
     annotate("text", x = Inf, y = -Inf, label = anno_text, hjust = 1.05, vjust = -0.5, size = 4.5, color = "black") +
     coord_cartesian(xlim = c(min_x, max_x), ylim = c(0, upper_limit_y)) +
     scale_y_continuous(name = "Hazard Ratio (95% CI)", breaks = seq(0, 1.5, by = 0.5), sec.axis = sec_axis(~ . * scale_factor, name = "Probability Density")) +
-    theme_bw() + labs(title = title_str, x = "TyHGB Index") +
+    theme_bw() + labs(title = title_str, x = "TyHGB-WBC Index") +
     theme(plot.title = element_text(size = 14, face = "bold"),
           axis.title.y.left = element_text(size = 12), axis.text.y.left = element_text(size = 11),
           axis.title.y.right = element_text(size = 12), axis.text.y.right = element_text(size = 11),
@@ -608,7 +594,7 @@ final_rcs_plot
 
 ```{r}
 #| label: fig-subgroup
-#| fig-cap: "Figure 4: Subgroup analyses for the association between TyHGB index and mortality risk"
+#| fig-cap: "Figure 4: Subgroup analyses for the association between TyHGB-WBC index and mortality risk"
 #| fig-width: 22
 #| fig-height: 12
 
@@ -633,7 +619,6 @@ df_sub <- df_final %>%
   )
 
 sub_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_sub)
-# Adjusting based on Model 4 covariates
 all_adj_vars <- unlist(strsplit(covs_m4, " \\+ "))
 
 var_list <- list(
@@ -653,12 +638,12 @@ generate_subgroup_data <- function(event_var) {
     curr_covs <- if(!is.na(rm_cov)) setdiff(all_adj_vars, rm_cov) else all_adj_vars
     covs_fmla <- paste(curr_covs, collapse = " + ")
 
-    form_inter <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB *", col_name, "+", covs_fmla))
+    form_inter <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC *", col_name, "+", covs_fmla))
     fit_inter <- suppressWarnings(tryCatch(svycoxph(form_inter, design = sub_design), error = function(e) NULL))
     
     p_inter <- NA
     if(!is.null(fit_inter)) {
-      p_inter <- suppressWarnings(tryCatch({ regTermTest(fit_inter, as.formula(paste("~ TyHGB:", col_name)))$p[1] }, error = function(e) NA))
+      p_inter <- suppressWarnings(tryCatch({ regTermTest(fit_inter, as.formula(paste("~ TyWBC:", col_name)))$p[1] }, error = function(e) NA))
     }
     p_inter_str <- ifelse(is.na(p_inter), "N/A", ifelse(p_inter < 0.001, "<0.001", sprintf("%.3f", p_inter)))
     
@@ -672,7 +657,7 @@ generate_subgroup_data <- function(event_var) {
     for (lvl in lvls) {
       ev_count <- sum(df_sub[[col_name]] == lvl & df_sub[[event_var]] == 1, na.rm = TRUE)
       d_sub <- suppressMessages(suppressWarnings(subset(sub_design, get(col_name) == lvl)))
-      form_sub <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_fmla))
+      form_sub <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC +", covs_fmla))
       fit_sub <- suppressWarnings(tryCatch(svycoxph(form_sub, design = d_sub), error = function(e) NULL))
       
       if (!is.null(fit_sub)) {
@@ -745,33 +730,32 @@ final_forest
 
 ```{r}
 #| label: fig-mediation
-#| fig-cap: "Figure 5: Mediation analysis of the TyHGB index on mortality via Uric Acid and WBC count"
-#| fig-width: 16
-#| fig-height: 12
+#| fig-cap: "Figure 5: Mediation analysis of the TyHGB-WBC index on mortality via Uric Acid"
+#| fig-width: 14
+#| fig-height: 6
 
-# Note: Removed Fasting Glucose, HDL-C, ALT, AST to prevent circular algebra and confounding bias.
 draw_mediation_plot <- function(event_var, mediator_var, title_str, mediator_label) {
   df_med <- df_final[!is.na(df_final[[mediator_var]]), ]
   des <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_med)
   
-  fit_a <- svyglm(as.formula(paste(mediator_var, "~ TyHGB +", covs_str)), design = des)
-  beta_a <- coef(fit_a)["TyHGB"]
-  se_a <- sqrt(vcov(fit_a)["TyHGB", "TyHGB"])
-  p_a <- summary(fit_a)$coef["TyHGB", "Pr(>|t|)"]
+  fit_a <- svyglm(as.formula(paste(mediator_var, "~ TyWBC +", covs_str)), design = des)
+  beta_a <- coef(fit_a)["TyWBC"]
+  se_a <- sqrt(vcov(fit_a)["TyWBC", "TyWBC"])
+  p_a <- summary(fit_a)$coef["TyWBC", "Pr(>|t|)"]
   
-  fit_tot <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = des)
-  beta_tot <- coef(fit_tot)["TyHGB"]
-  p_tot <- summary(fit_tot)$coef["TyHGB", "Pr(>|z|)"]
+  fit_tot <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC +", covs_str)), design = des)
+  beta_tot <- coef(fit_tot)["TyWBC"]
+  p_tot <- summary(fit_tot)$coef["TyWBC", "Pr(>|z|)"]
   hr_tot <- exp(beta_tot)
-  lci_tot <- exp(beta_tot - 1.96*sqrt(vcov(fit_tot)["TyHGB", "TyHGB"]))
-  uci_tot <- exp(beta_tot + 1.96*sqrt(vcov(fit_tot)["TyHGB", "TyHGB"]))
+  lci_tot <- exp(beta_tot - 1.96*sqrt(vcov(fit_tot)["TyWBC", "TyWBC"]))
+  uci_tot <- exp(beta_tot + 1.96*sqrt(vcov(fit_tot)["TyWBC", "TyWBC"]))
   
-  fit_dir <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", mediator_var, "+", covs_str)), design = des)
-  beta_dir <- coef(fit_dir)["TyHGB"]
-  p_dir <- summary(fit_dir)$coef["TyHGB", "Pr(>|z|)"]
+  fit_dir <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC +", mediator_var, "+", covs_str)), design = des)
+  beta_dir <- coef(fit_dir)["TyWBC"]
+  p_dir <- summary(fit_dir)$coef["TyWBC", "Pr(>|z|)"]
   hr_dir <- exp(beta_dir)
-  lci_dir <- exp(beta_dir - 1.96*sqrt(vcov(fit_dir)["TyHGB", "TyHGB"]))
-  uci_dir <- exp(beta_dir + 1.96*sqrt(vcov(fit_dir)["TyHGB", "TyHGB"]))
+  lci_dir <- exp(beta_dir - 1.96*sqrt(vcov(fit_dir)["TyWBC", "TyWBC"]))
+  uci_dir <- exp(beta_dir + 1.96*sqrt(vcov(fit_dir)["TyWBC", "TyWBC"]))
   
   beta_b <- coef(fit_dir)[mediator_var]
   p_b <- summary(fit_dir)$coef[mediator_var, "Pr(>|z|)"]
@@ -789,7 +773,7 @@ draw_mediation_plot <- function(event_var, mediator_var, title_str, mediator_lab
   str_b <- sprintf("%.3f (95%%CI: %.3f~%.3f, %s)", hr_b, lci_b, uci_b, fmt_p(p_b))
   str_prop <- sprintf("%.2f%%", prop_med)
   
-  boxes <- data.frame(x = c(1.5, 8.5, 1.5, 8.5, 5), y = c(6, 6, 1, 1, 4), label = c("TyHGB", title_str, "TyHGB", title_str, mediator_label))
+  boxes <- data.frame(x = c(1.5, 8.5, 1.5, 8.5, 5), y = c(6, 6, 1, 1, 4), label = c("TyWBC", title_str, "TyWBC", title_str, mediator_label))
   
   p <- ggplot() + theme_void() + coord_cartesian(xlim = c(0, 10), ylim = c(0, 7)) +
     geom_segment(aes(x = 2.5, y = 6, xend = 7.5, yend = 6), arrow = arrow(length = unit(0.3, "cm")), color = "#2CA02C", linewidth = 1) + 
@@ -810,11 +794,9 @@ draw_mediation_plot <- function(event_var, mediator_var, title_str, mediator_lab
 }
 
 p_acm_sua <- draw_mediation_plot("status_acm", "LBXSUA", "All-cause\nmortality", "Uric Acid")
-p_acm_wbc <- draw_mediation_plot("status_acm", "LBXWBCSI", "All-cause\nmortality", "WBC Count")
 p_cvm_sua <- draw_mediation_plot("status_cvm", "LBXSUA", "Cardiovascular\nmortality", "Uric Acid")
-p_cvm_wbc <- draw_mediation_plot("status_cvm", "LBXWBCSI", "Cardiovascular\nmortality", "WBC Count")
 
-final_mediation <- (p_acm_sua | p_acm_wbc) / (p_cvm_sua | p_cvm_wbc) + 
+final_mediation <- (p_acm_sua | p_cvm_sua) + 
   plot_annotation(tag_levels = 'A', tag_prefix = '(', tag_suffix = ')') +
   theme(plot.tag = element_text(size = 22, face = "bold"))
 final_mediation
@@ -827,14 +809,14 @@ final_mediation
 #| tbl-cap: "Table 4: Competing risk analysis (Fine-Gray model) for cardiovascular mortality"
 
 df_fg <- df_final[, c("time_months", "event_cr", "SDMVPSU", "SDMVSTRA", "WTSAF2YR", 
-                      "TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z", 
+                      "TyWBC_Z", "ABSI_Z", "WWI_Z", "WHtR_Z", 
                       "RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten", "cvd_hx", "BMXBMI", "DMDEDUC2", "INDFMPIR")]
 df_fg$event_cr_fg <- factor(df_fg$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
 
 fg_data <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_fg, etype = "CVM")
 fg_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR * fgwt, nest = TRUE, data = fg_data)
 
-markers <- c("TyHGB_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
+markers <- c("TyWBC_Z", "ABSI_Z", "WWI_Z", "WHtR_Z")
 
 get_fg_res <- function(marker) {
   form_uni <- paste0("Surv(fgstart, fgstop, fgstatus) ~ ", marker)
@@ -876,10 +858,10 @@ table_fg_gt
 ```{r}
 #| label: fig-nomogram
 #| fig-cap: "Figure 6: Nomograms predicting 3-, 5-, and 10-year survival probabilities for ACM (A) and CVM (B)"
-#| fig-width: 14
-#| fig-height: 14
+#| fig-width: 16
+#| fig-height: 18
 
-model_vars <- c("TyHGB", "RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten", "cvd_hx", "BMXBMI", "DMDEDUC2", "INDFMPIR")
+model_vars <- c("TyWBC", "RIDAGEYR", "RIAGENDR", "RIDRETH1", "diabetes", "hyperten", "cvd_hx", "BMXBMI", "DMDEDUC2", "INDFMPIR")
 sys_vars <- c("time_months", "status_acm", "status_cvm", "event_cr", "WTSAF2YR")
 
 df_nomo_rms <- df_final %>% select(all_of(c(sys_vars, model_vars))) %>% drop_na() %>% as.data.frame() 
@@ -891,20 +873,19 @@ df_nomo_rms$cvd_hx <- factor(df_nomo_rms$cvd_hx, levels = c(0, 1), labels = c("N
 df_nomo_rms$RIDRETH1 <- as.factor(df_nomo_rms$RIDRETH1)
 df_nomo_rms$DMDEDUC2 <- as.factor(df_nomo_rms$DMDEDUC2)
 
-# FIX LỖI ĐỤNG ĐỘ HÀM: Gọi đích danh Hmisc::label
-Hmisc::label(df_nomo_rms$TyHGB)    <- "TyHGB Index"
+Hmisc::label(df_nomo_rms$TyWBC)    <- "TyHGB-WBC Index"
 Hmisc::label(df_nomo_rms$RIDAGEYR) <- "Age (years)"
 Hmisc::label(df_nomo_rms$RIAGENDR) <- "Gender"
 Hmisc::label(df_nomo_rms$RIDRETH1) <- "Race/Ethnicity"
 Hmisc::label(df_nomo_rms$diabetes) <- "Diabetes"
 Hmisc::label(df_nomo_rms$hyperten) <- "Hypertension"
 Hmisc::label(df_nomo_rms$cvd_hx)   <- "CVD History"
-Hmisc::label(df_nomo_rms$BMXBMI)   <- "BMI"
+Hmisc::label(df_nomo_rms$BMXBMI)   <- "BMI (kg/m2)"
 
 dd <- datadist(df_nomo_rms)
 options(datadist = "dd")
 
-form_acm <- as.formula(paste("Surv(time_months, status_acm) ~ TyHGB +", covs_str))
+form_acm <- as.formula(paste("Surv(time_months, status_acm) ~ TyWBC +", covs_str))
 fit_acm_nomo <- cph(form_acm, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, time.inc = 120, weights = df_nomo_rms$WTSAF2YR)
 surv_acm <- Survival(fit_acm_nomo)
 surv3_acm <- function(lp) surv_acm(36, lp)
@@ -920,19 +901,18 @@ df_nomo_rms$event_cr_fg <- factor(df_nomo_rms$event_cr, levels = c(0, 1, 2), lab
 fg_data_nomo <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_nomo_rms, etype = "CVM")
 fg_data_nomo$final_wt <- fg_data_nomo$WTSAF2YR * fg_data_nomo$fgwt
 
-# FIX LỖI TƯƠNG TỰ CHO TẬP DỮ LIỆU FINE-GRAY
-Hmisc::label(fg_data_nomo$TyHGB)    <- "TyHGB Index"
+Hmisc::label(fg_data_nomo$TyWBC)    <- "TyHGB-WBC Index"
 Hmisc::label(fg_data_nomo$RIDAGEYR) <- "Age (years)"
 Hmisc::label(fg_data_nomo$RIAGENDR) <- "Gender"
 Hmisc::label(fg_data_nomo$RIDRETH1) <- "Race/Ethnicity"
 Hmisc::label(fg_data_nomo$diabetes) <- "Diabetes"
 Hmisc::label(fg_data_nomo$hyperten) <- "Hypertension"
 Hmisc::label(fg_data_nomo$cvd_hx)   <- "CVD History"
-Hmisc::label(fg_data_nomo$BMXBMI)   <- "BMI"
+Hmisc::label(fg_data_nomo$BMXBMI)   <- "BMI (kg/m2)"
 
 options(datadist = "dd") 
 
-form_cvm <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB +", covs_str))
+form_cvm <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyWBC +", covs_str))
 fit_cvm_nomo <- cph(form_cvm, data = fg_data_nomo, x = TRUE, y = TRUE, surv = TRUE, time.inc = 120, weights = fg_data_nomo$final_wt)
 surv_cvm <- Survival(fit_cvm_nomo)
 surv3_cvm <- function(lp) surv_cvm(36, lp)
@@ -944,14 +924,14 @@ nom_cvm <- nomogram(fit_cvm_nomo, fun = list(surv3_cvm, surv5_cvm, surv10_cvm),
                     funlabel = c("3-Year CVM Survival", "5-Year CVM Survival", "10-Year CVM Survival"),
                     fun.at = prob_scale_cvm, lp = FALSE)
 
-par(mfrow=c(2,1), mar=c(5, 4, 4, 2) + 0.1)
-plot(nom_acm, cex.axis=0.8, xfrac=0.35)
-title("A. Nomogram for All-Cause Mortality (ACM)", adj = 0, line = 1, cex.main=1.2)
-plot(nom_cvm, cex.axis=0.8, xfrac=0.35)
-title("B. Nomogram for Cardiovascular Mortality (CVM) - Fine-Gray Model", adj = 0, line = 1, cex.main=1.2)
+par(mfrow=c(2,1), mar=c(5, 6, 4, 3) + 0.1)
+plot(nom_acm, cex.axis=0.85, cex.var=0.9, xfrac=0.45)
+title("A. Nomogram for All-Cause Mortality (ACM)", adj = 0, line = 1.5, cex.main=1.4)
+plot(nom_cvm, cex.axis=0.85, cex.var=0.9, xfrac=0.45)
+title("B. Nomogram for Cardiovascular Mortality (CVM) - Fine-Gray Model", adj = 0, line = 1.5, cex.main=1.4)
 ```
 
-## 11. Calibration Plots with 1000 Bootstraps
+## 11. Calibration Plots
 
 ```{r}
 #| label: fig-calibration
@@ -962,7 +942,7 @@ title("B. Nomogram for Cardiovascular Mortality (CVM) - Fine-Gray Model", adj = 
 set.seed(123)
 cal_acm <- calibrate(fit_acm_nomo, cmethod='KM', method="crossvalidation", B=10, u=120)
 
-form_cvm_proxy <- as.formula(paste("Surv(time_months, event_cr == 1) ~ TyHGB +", covs_str))
+form_cvm_proxy <- as.formula(paste("Surv(time_months, event_cr == 1) ~ TyWBC +", covs_str))
 fit_cvm_cal_proxy <- cph(form_cvm_proxy, data = df_nomo_rms, x = TRUE, y = TRUE, surv = TRUE, time.inc = 120, weights = df_nomo_rms$WTSAF2YR)
 cal_cvm <- calibrate(fit_cvm_cal_proxy, cmethod='KM', method="crossvalidation", B=10, u=120)
 
@@ -997,7 +977,7 @@ p_cal_acm | p_cal_cvm
 
 ```{r}
 #| label: fig-dca
-#| fig-cap: "Figure 8: Decision Curve Analysis (DCA) demonstrating the net benefit of the TyHGB clinical model at 10 years"
+#| fig-cap: "Figure 8: Decision Curve Analysis (DCA) demonstrating the net benefit of the TyHGB-WBC clinical model at 10 years"
 #| fig-width: 14
 #| fig-height: 6
 
@@ -1008,7 +988,7 @@ surv10_cvm_cal <- Survival(fit_cvm_nomo)
 df_nomo_rms$prob_cvm_10 <- 1 - surv10_cvm_cal(120, predict(fit_cvm_nomo, newdata = df_dca, type="lp"))
 
 plot_beautiful_dca <- function(form, event_time, title_str, line_color, var_name) {
-  lbl_list <- list(); lbl_list[[var_name]] <- "TyHGB Model"
+  lbl_list <- list(); lbl_list[[var_name]] <- "TyWBC Model"
   dca_obj <- dca(form, data = df_nomo_rms, time = event_time, label = lbl_list)
   df <- as_tibble(dca_obj) %>% dplyr::filter(!is.na(net_benefit))
   
@@ -1023,9 +1003,9 @@ plot_beautiful_dca <- function(form, event_time, title_str, line_color, var_name
     geom_rect(data = regions, aes(xmin = x_start, xmax = x_end, ymin = y_min, ymax = 0, fill = label), alpha = 0.2) +
     geom_text(data = regions, aes(x = x_mid, y = strip_y, label = label), color = "gray20", size = 3.5, fontface = "bold", vjust = 0.5) +
     geom_line(data = df, aes(x = threshold, y = net_benefit, color = label, linetype = label), linewidth = 1.2) +
-    scale_color_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyHGB Model" = line_color)) +
-    scale_fill_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyHGB Model" = line_color)) +
-    scale_linetype_manual(values = c("Treat All" = "solid", "Treat None" = "solid", "TyHGB Model" = "solid")) +
+    scale_color_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyWBC Model" = line_color)) +
+    scale_fill_manual(values = c("Treat All" = "gray50", "Treat None" = "black", "TyWBC Model" = line_color)) +
+    scale_linetype_manual(values = c("Treat All" = "solid", "Treat None" = "solid", "TyWBC Model" = "solid")) +
     coord_cartesian(xlim = c(0, max(df$threshold)), ylim = c(y_min, max_nb * 1.05)) +
     scale_x_continuous(labels = scales::percent_format(accuracy = 1), expand = c(0, 0)) + scale_y_continuous(expand = c(0, 0)) +
     labs(title = title_str, x = "Threshold Probability", y = "Net Benefit") + theme_classic() +
@@ -1045,14 +1025,14 @@ p_dca_acm | p_dca_cvm
 
 ```{r}
 #| label: tbl-threshold
-#| tbl-cap: "Supplemental Table 4: Threshold effect analysis of TyHGB on ACM and CVM using two-piecewise Cox regression"
+#| tbl-cap: "Supplemental Table 4: Threshold effect analysis of TyHGB-WBC on ACM and CVM using two-piecewise Cox regression"
 
 find_inflection <- function(event_var) {
-  search_grid <- seq(quantile(df_final$TyHGB, 0.15), quantile(df_final$TyHGB, 0.85), length.out = 30)
+  search_grid <- seq(quantile(df_final$TyWBC, 0.15), quantile(df_final$TyWBC, 0.85), length.out = 30)
   best_k <- NA; best_ll <- -Inf
   
   for(k in search_grid) {
-    d_temp <- df_final %>% mutate(T1 = ifelse(TyHGB < k, TyHGB, k), T2 = ifelse(TyHGB >= k, TyHGB - k, 0))
+    d_temp <- df_final %>% mutate(T1 = ifelse(TyWBC < k, TyWBC, k), T2 = ifelse(TyWBC >= k, TyWBC - k, 0))
     des <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = d_temp)
     form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ T1 + T2 +", covs_str))
     fit <- suppressWarnings(tryCatch(svycoxph(form, design = des), error = function(e) NULL))
@@ -1063,17 +1043,15 @@ find_inflection <- function(event_var) {
 
 run_piecewise <- function(event_var, outcome_name) {
   k <- find_inflection(event_var)
-  d_opt <- df_final %>% mutate(T1 = ifelse(TyHGB < k, TyHGB, k), T2 = ifelse(TyHGB >= k, TyHGB - k, 0))
+  d_opt <- df_final %>% mutate(T1 = ifelse(TyWBC < k, TyWBC, k), T2 = ifelse(TyWBC >= k, TyWBC - k, 0))
   des_opt <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = d_opt)
   
-  # Standard Cox (Linear)
-  fit_lin <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB +", covs_str)), design = des_opt)
+  fit_lin <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC +", covs_str)), design = des_opt)
   sm_lin <- summary(fit_lin)
-  hr_lin <- sprintf("%.3f (%.3f-%.3f)", sm_lin$conf.int["TyHGB", 1], sm_lin$conf.int["TyHGB", 3], sm_lin$conf.int["TyHGB", 4])
-  p_val_lin <- sm_lin$coefficients["TyHGB", "Pr(>|z|)"]
+  hr_lin <- sprintf("%.3f (%.3f-%.3f)", sm_lin$conf.int["TyWBC", 1], sm_lin$conf.int["TyWBC", 3], sm_lin$conf.int["TyWBC", 4])
+  p_val_lin <- sm_lin$coefficients["TyWBC", "Pr(>|z|)"]
   p_lin <- ifelse(p_val_lin < 0.001, "<0.001", sprintf("%.3f", p_val_lin))
   
-  # Two-piecewise Cox
   fit_pw <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ T1 + T2 +", covs_str)), design = des_opt)
   sm_pw <- summary(fit_pw)
   
@@ -1088,15 +1066,14 @@ run_piecewise <- function(event_var, outcome_name) {
   lrt_p <- 1 - pchisq(2 * (fit_pw$ll[2] - fit_lin$ll[2]), df = 1)
   lrt_p_str <- ifelse(lrt_p < 0.001, "<0.001", sprintf("%.3f", lrt_p))
   
-  # Lấy thêm Event Counts để reviewer khỏi thắc mắc risk saturation
-  event_t1 <- sum(d_opt$TyHGB < k & d_opt[[event_var]] == 1, na.rm = TRUE)
-  event_t2 <- sum(d_opt$TyHGB >= k & d_opt[[event_var]] == 1, na.rm = TRUE)
+  event_t1 <- sum(d_opt$TyWBC < k & d_opt[[event_var]] == 1, na.rm = TRUE)
+  event_t2 <- sum(d_opt$TyWBC >= k & d_opt[[event_var]] == 1, na.rm = TRUE)
   
   data.frame(
     Outcome = outcome_name, 
     Model = c("Standard linear model", "Two-piecewise model", 
-              sprintf("  TyHGB < %.1f (Events: %d)", k, event_t1),
-              sprintf("  TyHGB >= %.1f (Events: %d)", k, event_t2), "P for LRT"),
+              sprintf("  TyWBC < %.1f (Events: %d)", k, event_t1),
+              sprintf("  TyWBC >= %.1f (Events: %d)", k, event_t2), "P for LRT"),
     `HR (95% CI)` = c(hr_lin, "", hr_t1, hr_t2, ""), 
     `P value` = c(p_lin, "", p_t1, p_t2, lrt_p_str),
     check.names = FALSE
@@ -1111,9 +1088,10 @@ df_thresh %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weigh
 
 ```{r}
 #| label: tbl-mediation
-#| tbl-cap: "Supplemental Table 5: Detailed mediation analysis of TyHGB on ACM and CVM via multiple biomarkers"
+#| tbl-cap: "Supplemental Table 5: Detailed mediation analysis of TyHGB-WBC on ACM and CVM via Uric Acid"
 
-med_vars <- c("LBXSUA" = "Uric Acid", "LBXWBCSI" = "WBC Count")
+# LƯU Ý: Tuyệt đối không thêm WBC vào đây vì nó đã là một phần của biến TyWBC
+med_vars <- c("LBXSUA" = "Uric Acid")
 
 run_sobel_med <- function(event_var, outcome_label) {
   res_list <- list()
@@ -1121,15 +1099,15 @@ run_sobel_med <- function(event_var, outcome_label) {
     d_clean <- df_final[!is.na(df_final[[v]]), ]
     des <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_clean)
     
-    fit_a <- svyglm(as.formula(paste(v, "~ TyHGB +", covs_str)), design = des)
-    a <- coef(fit_a)["TyHGB"]; sa <- sqrt(vcov(fit_a)["TyHGB", "TyHGB"]) 
+    fit_a <- svyglm(as.formula(paste(v, "~ TyWBC +", covs_str)), design = des)
+    a <- coef(fit_a)["TyWBC"]; sa <- sqrt(vcov(fit_a)["TyWBC", "TyWBC"]) 
     
-    fit_b <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", v, "+", covs_str)), design = des)
+    fit_b <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyWBC +", v, "+", covs_str)), design = des)
     b <- coef(fit_b)[v]; sb <- sqrt(vcov(fit_b)[v, v]) 
-    c_prime <- coef(fit_b)["TyHGB"]; sc_prime <- sqrt(vcov(fit_b)["TyHGB", "TyHGB"])
+    c_prime <- coef(fit_b)["TyWBC"]; sc_prime <- sqrt(vcov(fit_b)["TyWBC", "TyWBC"])
     
-    fit_c <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", covs_str)), design = des)
-    c_tot <- coef(fit_c)["TyHGB"]; sc_tot <- sqrt(vcov(fit_c)["TyHGB", "TyHGB"])
+    fit_c <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyWBC +", covs_str)), design = des)
+    c_tot <- coef(fit_c)["TyWBC"]; sc_tot <- sqrt(vcov(fit_c)["TyWBC", "TyWBC"])
     
     ab <- a * b; seb <- sqrt(a^2 * sb^2 + b^2 * sa^2)
     z_ab <- ab / seb; p_ab <- 2 * (1 - pnorm(abs(z_ab)))
@@ -1139,7 +1117,7 @@ run_sobel_med <- function(event_var, outcome_label) {
     
     fmt <- function(est, se) sprintf("%.3f (%.3f to %.3f)", est, est - 1.96*se, est + 1.96*se)
     fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
-    p_ade <- summary(fit_b)$coef["TyHGB", "Pr(>|z|)"]
+    p_ade <- summary(fit_b)$coef["TyWBC", "Pr(>|z|)"]
     
     res_list[[length(res_list)+1]] <- data.frame(
       Outcome = outcome_label, Mediator = med_vars[v],
@@ -1159,89 +1137,63 @@ df_med_tbl %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weig
 
 ```{r}
 #| label: tbl-sens
-#| tbl-cap: "Supplemental Table 6: Association between TyHGB and mortality excluding events within the first 24 months"
+#| tbl-cap: "Supplemental Table 6: Association between TyHGB-WBC and mortality excluding events within the first 24 months"
 
-# 1. BÙA CHÚ CHỐNG LỖI "ONLY ONE PSU" CỦA NHANES
 options(survey.lonely.psu = "adjust")
+df_final <- df_final %>% mutate(TyWBC_Q_num = as.numeric(TyWBC_Q))
 
-df_final <- df_final %>% mutate(TyHGB_Q_num = as.numeric(TyHGB_Q))
-
-# 2. TẠO DESIGN GỐC TRƯỚC, KHÔNG FILTER DATA THÔ
 des_full <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
-
-# 3. DÙNG HÀM SUBSET ĐỂ CẮT DATA AN TOÀN (Giữ nguyên cấu trúc Stratum của CDC)
 des_sens <- subset(des_full, time_months > 24)
 
-# KHAI BÁO LẠI LIST MODS CHỨA ĐỦ CẢ 4 MODEL NHƯ BƯỚC 2
-mods <- list(
-  "Model 1" = "", 
-  "Model 2" = paste("+", covs_m2), 
-  "Model 3" = paste("+", covs_m3),
-  "Model 4" = paste("+", covs_m4)
-)
+mods <- list("Model 1" = "", "Model 2" = paste("+", covs_m2), "Model 3" = paste("+", covs_m3), "Model 4" = paste("+", covs_m4))
 
 run_sens_model <- function(event_var, outcome_name) {
   res_list <- list()
   for(m in names(mods)) {
-    # Continuous
-    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB", mods[[m]]))
+    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC", mods[[m]]))
     fit_cont <- svycoxph(f_cont, design = des_sens)
     sm_cont <- summary(fit_cont)
-    hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB", 1], sm_cont$conf.int["TyHGB", 3], sm_cont$conf.int["TyHGB", 4])
-    
-    # P-VALUE LIÊN TỤC
-    p_val_cont <- sm_cont$coef["TyHGB", "Pr(>|z|)"]
+    hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyWBC", 1], sm_cont$conf.int["TyWBC", 3], sm_cont$conf.int["TyWBC", 4])
+    p_val_cont <- sm_cont$coef["TyWBC", "Pr(>|z|)"]
     p_cont <- ifelse(p_val_cont < 0.001, "<0.001", sprintf("%.3f", p_val_cont))
     
-    # Quartiles
-    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods[[m]]))
+    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC_Q", mods[[m]]))
     fit_q <- svycoxph(f_q, design = des_sens)
     sm_q <- summary(fit_q)
     
-    # P-VALUE QUARTILES
-    p_q2 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ2", "Pr(>|z|)"])
-    p_q3 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ3", "Pr(>|z|)"])
-    p_q4 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ4", "Pr(>|z|)"])
+    p_q2 <- sprintf("%.3f", sm_q$coef["TyWBC_QQ2", "Pr(>|z|)"])
+    p_q3 <- sprintf("%.3f", sm_q$coef["TyWBC_QQ3", "Pr(>|z|)"])
+    p_q4 <- sprintf("%.3f", sm_q$coef["TyWBC_QQ4", "Pr(>|z|)"])
     
-    # P for trend
-    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods[[m]]))
+    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC_Q_num", mods[[m]]))
     fit_trend <- svycoxph(f_trend, design = des_sens)
-    p_val_trend <- summary(fit_trend)$coef["TyHGB_Q_num", "Pr(>|z|)"]
+    p_val_trend <- summary(fit_trend)$coef["TyWBC_Q_num", "Pr(>|z|)"]
     p_trend <- ifelse(p_val_trend < 0.001, "<0.001", sprintf("%.3f", p_val_trend))
     
     res_list[[length(res_list)+1]] <- data.frame(
-      Outcome = outcome_name, TyHGB = c("Continuous", "Q1", "Q2", "Q3", "Q4", "P for trend"),
-      Model = m,
+      Outcome = outcome_name, TyWBC = c("Continuous", "Q1", "Q2", "Q3", "Q4", "P for trend"), Model = m,
       `HR (95% CI)` = c(hr_cont, "Ref.", 
-                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ2", 1], sm_q$conf.int["TyHGB_QQ2", 3], sm_q$conf.int["TyHGB_QQ2", 4]),
-                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ3", 1], sm_q$conf.int["TyHGB_QQ3", 3], sm_q$conf.int["TyHGB_QQ3", 4]),
-                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ4", 1], sm_q$conf.int["TyHGB_QQ4", 3], sm_q$conf.int["TyHGB_QQ4", 4]), ""),
-      `P value` = c(p_cont, "-", p_q2, p_q3, p_q4, p_trend),
-      check.names = FALSE
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyWBC_QQ2", 1], sm_q$conf.int["TyWBC_QQ2", 3], sm_q$conf.int["TyWBC_QQ2", 4]),
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyWBC_QQ3", 1], sm_q$conf.int["TyWBC_QQ3", 3], sm_q$conf.int["TyWBC_QQ3", 4]),
+                        sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyWBC_QQ4", 1], sm_q$conf.int["TyWBC_QQ4", 3], sm_q$conf.int["TyWBC_QQ4", 4]), ""),
+      `P value` = c(p_cont, "-", p_q2, p_q3, p_q4, p_trend), check.names = FALSE
     )
   }
   bind_rows(res_list)
 }
 
-df_sens_tbl <- bind_rows(run_sens_model("status_acm", "All-Cause Mortality"), run_sens_model("status_cvm", "Cardiovascular Mortality")) %>%
-  tidyr::pivot_wider(names_from = Model, values_from = c(`HR (95% CI)`, `P value`))
-
-# GỌI HIỂN THỊ ĐỦ 4 MODELS LÊN BẢNG GT
-df_sens_tbl %>% 
-  select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3"), contains("Model 4")) %>%
-  gt(groupname_col = "Outcome") %>% 
-  tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0")
+df_sens_tbl <- bind_rows(run_sens_model("status_acm", "All-Cause Mortality"), run_sens_model("status_cvm", "Cardiovascular Mortality")) %>% tidyr::pivot_wider(names_from = Model, values_from = c(`HR (95% CI)`, `P value`))
+df_sens_tbl %>% select(Outcome, TyWBC, contains("Model 1"), contains("Model 2"), contains("Model 3"), contains("Model 4")) %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0")
 ```
 
-## 16. Multiple Imputation Stability Check
+## 16. Multiple Imputation Stability Check (m = 20)
 
 ```{r}
 #| label: fig-mice-stability
-#| fig-cap: "Supplemental Figure: Stability of the TyHGB prognostic value (High vs Low based on threshold) across 20 imputed datasets"
+#| fig-cap: "Supplemental Figure: Stability of the TyHGB-WBC prognostic value (High vs Low based on threshold) across 20 imputed datasets"
 #| fig-width: 14
 #| fig-height: 8
 
-# Tăng m = 20 theo chuẩn cho Missing Data
 imp_20 <- mice(df_step1[, vars_to_impute], m = 20, method = 'pmm', seed = 123, printFlag = FALSE)
 
 get_mice_hr_highlow <- function(event_var, threshold, title) {
@@ -1256,7 +1208,8 @@ get_mice_hr_highlow <- function(event_var, threshold, title) {
       steatosis = ifelse(HSI > 36, 1, 0),
       cm_risk = ifelse(BMXBMI>=25 | (RIAGENDR==1 & BMXWAIST>=94) | (RIAGENDR==2 & BMXWAIST>=80) | LBDSGLSI>=5.55 | diabetes==1 | hyperten==1 | LBXTR>=150 | (RIAGENDR==1 & LBDHDD<40) | (RIAGENDR==2 & LBDHDD<50), 1, 0),
       is_masld = ifelse(steatosis==1 & cm_risk==1, 1, 0),
-      TyHGB = (LBXTR/LBDHDD) + (0.7*LBDSGLSI) + (0.1*BMXBMI),
+      TyHGB = (LBXTR / LBDHDD) + (0.7 * LBDSGLSI) + (0.1 * BMXBMI),
+      TyWBC = TyHGB * LBXWBCSI,
       status_acm = ifelse(mortstat==1, 1, 0),
       status_cvm = ifelse(mortstat==1 & ucod_leading %in% c("001","005"), 1, 0),
       time_months = permth_int
@@ -1265,15 +1218,13 @@ get_mice_hr_highlow <- function(event_var, threshold, title) {
     d_i$diabetes <- as.numeric(as.character(d_i$diabetes))
     d_i$hyperten <- as.numeric(as.character(d_i$hyperten))
     
-    # CHIA NHÓM HIGH-LOW
-    d_i$TyHGB_High <- ifelse(d_i$TyHGB >= threshold, 1, 0)
+    d_i$TyWBC_High <- ifelse(d_i$TyWBC >= threshold, 1, 0)
     
     des_i <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_i)
-    # Điều chỉnh Model 4 (có sẵn trong data sau impute)
-    fit_i <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_High + RIDAGEYR + RIAGENDR + RIDRETH1 + diabetes + hyperten + cvd_hx + INDFMPIR + DMDEDUC2")), design = des_i)
+    fit_i <- svycoxph(as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC_High +", covs_str)), design = des_i)
     
-    estimates[i] <- coef(fit_i)["TyHGB_High"]
-    vars[i] <- vcov(fit_i)["TyHGB_High", "TyHGB_High"]
+    estimates[i] <- coef(fit_i)["TyWBC_High"]
+    vars[i] <- vcov(fit_i)["TyWBC_High", "TyWBC_High"]
     
     res_df <- rbind(res_df, data.frame(Imputation = paste("Imputation", i), HR = exp(estimates[i]), 
                                        LCI = exp(estimates[i] - 1.96*sqrt(vars[i])), UCI = exp(estimates[i] + 1.96*sqrt(vars[i]))))
@@ -1289,12 +1240,16 @@ get_mice_hr_highlow <- function(event_var, threshold, title) {
     geom_errorbarh(aes(xmin = LCI, xmax = UCI), height = 0.2, color = "#0055A4", linewidth = 1.2) +
     geom_point(size = 4.5, color = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", "#E64B35", "#0055A4"), 
                shape = ifelse(res_df$Imputation == "Pooled (Rubin's Rules)", 18, 16)) +
-    theme_classic() + labs(title = title, x = sprintf("Hazard Ratio (TyHGB >= %.1f vs < %.1f)", threshold, threshold), y = "") +
+    theme_classic() + labs(title = title, x = sprintf("Hazard Ratio (TyWBC >= %.1f vs < %.1f)", threshold, threshold), y = "") +
     theme(plot.title = element_text(face = "bold", size = 14), axis.title = element_text(face="bold"), axis.text = element_text(size = 9, color="black", face="bold"))
 }
 
-p_mice_acm <- get_mice_hr_highlow("status_acm", 12.1, "A. ACM Models Stability (Threshold = 12.1)")
-p_mice_cvm <- get_mice_hr_highlow("status_cvm", 11.9, "B. CVM Models Stability (Threshold = 11.9)")
+# TODO: ĐIỀN CON SỐ THỰC TẾ LẤY TỪ BƯỚC 13 VÀO ĐÂY SAU KHI CHẠY
+nguong_acm <- 100.0 
+nguong_cvm <- 100.0
+
+p_mice_acm <- get_mice_hr_highlow("status_acm", nguong_acm, paste("A. ACM Models Stability (Threshold =", nguong_acm, ")"))
+p_mice_cvm <- get_mice_hr_highlow("status_cvm", nguong_cvm, paste("B. CVM Models Stability (Threshold =", nguong_cvm, ")"))
 
 p_mice_acm | p_mice_cvm
 ```
@@ -1303,7 +1258,7 @@ p_mice_acm | p_mice_cvm
 
 ```{r}
 #| label: fig-evalue
-#| fig-cap: "Supplemental Figure: E-value curves for the High vs Low TyHGB index on mortality"
+#| fig-cap: "Supplemental Figure: E-value curves for the High vs Low TyHGB-WBC index on mortality"
 #| fig-width: 14
 #| fig-height: 6
 
@@ -1317,15 +1272,15 @@ get_evalue_ci <- function(est, limit) {
 }
 
 plot_evalue_highlow <- function(event_var, threshold, title) {
-  df_eva <- df_final; df_eva$TyHGB_High <- ifelse(df_eva$TyHGB >= threshold, 1, 0)
+  df_eva <- df_final; df_eva$TyWBC_High <- ifelse(df_eva$TyWBC >= threshold, 1, 0)
   des_eva <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_eva)
   
-  form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_High +", covs_str))
+  form <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyWBC_High +", covs_str))
   fit <- svycoxph(form, design = des_eva)
   sm <- summary(fit)
   
-  hr <- as.numeric(sm$conf.int["TyHGB_High", 1])
-  lci <- as.numeric(sm$conf.int["TyHGB_High", 3])
+  hr <- as.numeric(sm$conf.int["TyWBC_High", 1])
+  lci <- as.numeric(sm$conf.int["TyWBC_High", 3])
   e_point <- get_evalue(hr); e_lower <- get_evalue_ci(hr, lci)
   
   rr_eu <- seq(1.001, 20, length.out = 1000) 
@@ -1362,8 +1317,9 @@ plot_evalue_highlow <- function(event_var, threshold, title) {
   return(p)
 }
 
-p_ev_acm <- plot_evalue_highlow("status_acm", 12.1, "A. E-value for ACM (Threshold = 12.1)")
-p_ev_cvm <- plot_evalue_highlow("status_cvm", 11.9, "B. E-value for CVM (Threshold = 11.9)")
+# TODO: NHỚ ĐỔI THRESHOLD Ở ĐÂY CHO KHỚP BƯỚC 16 SAU KHI TÌM ĐƯỢC ĐIỂM UỐN
+p_ev_acm <- plot_evalue_highlow("status_acm", nguong_acm, paste("A. E-value for ACM (Threshold =", nguong_acm, ")"))
+p_ev_cvm <- plot_evalue_highlow("status_cvm", nguong_cvm, paste("B. E-value for CVM (Threshold =", nguong_cvm, ")"))
 p_ev_acm | p_ev_cvm
 ```
 
@@ -1375,9 +1331,8 @@ p_ev_acm | p_ev_cvm
 #| fig-width: 10
 #| fig-height: 6
 
-# KIỂM TRA ĐA CỘNG TUYẾN DỰA TRÊN MODEL FULL BIẾN (Model 4)
-f_vif_acm <- as.formula(paste("Surv(time_months, status_acm) ~ TyHGB +", covs_str))
-f_vif_cvm <- as.formula(paste("Surv(time_months, status_cvm) ~ TyHGB +", covs_str))
+f_vif_acm <- as.formula(paste("Surv(time_months, status_acm) ~ TyWBC +", covs_str))
+f_vif_cvm <- as.formula(paste("Surv(time_months, status_cvm) ~ TyWBC +", covs_str))
 
 fit_cox_acm <- svycoxph(f_vif_acm, design = masld_design)
 fit_cox_cvm <- svycoxph(f_vif_cvm, design = masld_design)
@@ -1412,23 +1367,23 @@ dag_model <- dagitty('dag {
   "Diabetes" [pos="1.2,-1.3"]
   "Hypertension" [pos="2.8,-1.3"]
   "BMI" [pos="2.0,-2.0"]
-  "TyHGB" [exposure, pos="0,0"]
+  "TyWBC" [exposure, pos="0,0"]
   "Mortality" [outcome, pos="4,0"]
   
-  "Age" -> "TyHGB"; "Age" -> "Mortality"
-  "Gender" -> "TyHGB"; "Gender" -> "Mortality"
-  "Race/Ethnicity" -> "TyHGB"; "Race/Ethnicity" -> "Mortality"
-  "Diabetes" -> "TyHGB"; "Diabetes" -> "Mortality"
-  "Hypertension" -> "TyHGB"; "Hypertension" -> "Mortality"
-  "BMI" -> "TyHGB"; "BMI" -> "Mortality"
-  "TyHGB" -> "Mortality"
+  "Age" -> "TyWBC"; "Age" -> "Mortality"
+  "Gender" -> "TyWBC"; "Gender" -> "Mortality"
+  "Race/Ethnicity" -> "TyWBC"; "Race/Ethnicity" -> "Mortality"
+  "Diabetes" -> "TyWBC"; "Diabetes" -> "Mortality"
+  "Hypertension" -> "TyWBC"; "Hypertension" -> "Mortality"
+  "BMI" -> "TyWBC"; "BMI" -> "Mortality"
+  "TyWBC" -> "Mortality"
 }')
 
 p_dag <- ggdag(dag_model, text = FALSE, use_labels = NULL) +
   geom_dag_edges(edge_color = "#D35400", edge_width = 0.8, arrow_directed = grid::arrow(length = grid::unit(0.12, "inches"), type = "closed")) +
   geom_dag_point(aes(color = name), size = 14) +
   geom_text(aes(label = name, x = x, y = y - 0.35), color = "black", fontface = "bold", size = 4.5) +
-  scale_color_manual(values = c("TyHGB" = "#E64B35", "Mortality" = "#0055A4", "Age" = "#95A5A6", "Gender" = "#95A5A6", 
+  scale_color_manual(values = c("TyWBC" = "#E64B35", "Mortality" = "#0055A4", "Age" = "#95A5A6", "Gender" = "#95A5A6", 
                                 "Race/Ethnicity" = "#95A5A6", "Diabetes" = "#95A5A6", "Hypertension" = "#95A5A6", "BMI" = "#95A5A6")) +
   scale_x_continuous(expand = expansion(mult = 0.15)) + scale_y_continuous(expand = expansion(mult = 0.2)) +
   theme_dag_blank() + theme(legend.position = "none")
@@ -1436,6 +1391,4 @@ p_dag <- ggdag(dag_model, text = FALSE, use_labels = NULL) +
 tbl_vif
 p_dag
 ```
-
-
 
