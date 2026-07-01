@@ -1321,7 +1321,6 @@ get_mice_hr_highlow <- function(event_var, threshold, title) {
     theme(plot.title = element_text(face = "bold", size = 14), axis.title = element_text(face="bold"), axis.text = element_text(size = 9, color="black", face="bold"))
 }
 
-# ĐIỀN CON SỐ THỰC TẾ LẤY TỪ BƯỚC 14 VÀO ĐÂY SAU KHI CHẠY (Tạm để 4.5)
 nguong_acm <- 4.5 
 nguong_cvm <- 4.5
 
@@ -1394,7 +1393,6 @@ plot_evalue_highlow <- function(event_var, threshold, title) {
   return(p)
 }
 
-# NHỚ ĐỔI THRESHOLD Ở ĐÂY CHO KHỚP BƯỚC 17
 p_ev_acm <- plot_evalue_highlow("status_acm", nguong_acm, paste("A. E-value for ACM (Threshold =", nguong_acm, ")"))
 p_ev_cvm <- plot_evalue_highlow("status_cvm", nguong_cvm, paste("B. E-value for CVM (Threshold =", nguong_cvm, ")"))
 p_ev_acm | p_ev_cvm
