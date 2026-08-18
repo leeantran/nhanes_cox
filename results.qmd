@@ -1,5 +1,5 @@
 ---
-title: "Prognostic Value of Remnant Cholesterol (RC) in Patients with MASLD"
+title: "Prognostic Value of TyHGB Index in Patients with MASLD"
 author: An Tran
 date: last-modified
 format:
@@ -18,12 +18,12 @@ knitr:
 ---
 
 ```{r}
-#| label: setup
 pacman::p_load(readxl, survey, survival, gtsummary, survminer, splines, mice, timeROC, 
                dplyr, ggplot2, ggsci, rms, tidycmprsk, tidyr, survIDINRI, tableone,
                patchwork, gt, forestploter, regplot, dcurves, car, dagitty, ggdag)
 
-raw_df <- read_excel("data.xlsx", sheet = "RAW DATA")
+# ĐỔI TÊN FILE VÀ SHEET THEO ĐÚNG DATA MỚI CỦA MÀY
+raw_df <- read_excel("data_v2.xlsx", sheet = "Modified data")
 
 df_step1 <- raw_df %>% 
   filter(RIDAGEYR >= 20) %>%
@@ -34,8 +34,24 @@ df_step1 <- raw_df %>%
       !is.na(WTSAF2YR) & WTSAF2YR > 0 
   )
 
+for (col in c("BPQ150", "BPQ040A", "BPQ101D", "BPQ090D", "DIQ050", "DID070")) {
+  if (!(col %in% colnames(df_step1))) df_step1[[col]] <- NA
+}
+
 df_step1 <- df_step1 %>%
-  mutate(cvd_hx = ifelse(MCQ160B == 1 | MCQ160C == 1 | MCQ160E == 1 | MCQ160F == 1, 1, 0))
+  mutate(
+    cvd_hx = ifelse(MCQ160B %in% c(1,"1") | MCQ160C %in% c(1,"1") | MCQ160E %in% c(1,"1") | MCQ160F %in% c(1,"1"), 1, 0),
+    
+    # XỬ LÝ SỐ 1 (Yes) VÀ GỘP 2, 7, 9 THÀNH 0 (No)
+    htn_med_val = coalesce(as.numeric(BPQ150), as.numeric(BPQ040A)),
+    htn_med = ifelse(!is.na(htn_med_val) & htn_med_val == 1, 1, 0),
+    
+    lipid_med_val = coalesce(as.numeric(BPQ101D), as.numeric(BPQ090D)),
+    lipid_med = ifelse(!is.na(lipid_med_val) & lipid_med_val == 1, 1, 0),
+    
+    DIQ050 = ifelse(!is.na(as.numeric(DIQ050)) & as.numeric(DIQ050) == 1, 1, 0),
+    DID070 = ifelse(!is.na(as.numeric(DID070)) & as.numeric(DID070) == 1, 1, 0)
+  )
 
 vars_to_impute <- c("INDFMPIR", "DMDEDUC2", "DMDMARTL", "LBXWBCSI", "LBXSCR", 
                     "LBXSUA", "cvd_hx", "diabetes", "hyperten")
@@ -64,15 +80,19 @@ df_final <- df_imputed %>%
         (RIAGENDR == 1 & LBDHDD < 40) | (RIAGENDR == 2 & LBDHDD < 50), 1, 0),
     
     is_masld = ifelse(steatosis == 1 & cm_risk == 1, 1, 0),
-    
     TyHGB = (LBXTR / LBDHDD) + (0.7 * LBDSGLSI) + (0.1 * BMXBMI),
-    
     ABSI = BMXWAIST / ((BMXBMI^(2/3)) * (BMXHT^(1/2))),
     WWI = BMXWAIST / sqrt(BMXWT),
     WHtR = BMXWAIST / BMXHT,
-    
-    # TẠO TỶ SỐ AST/ALT (Tránh đa cộng tuyến)
     AST_ALT_ratio = LBXSASSI / LBXSATSI,
+    
+    FIB4 = (RIDAGEYR * LBXSASSI) / (LBXPLTSI * sqrt(LBXSATSI)),
+    FIB4_cat = case_when(
+      FIB4 < 1.3 ~ "< 1.3",
+      FIB4 >= 1.3 & FIB4 <= 2.67 ~ "1.3 - 2.67",
+      FIB4 > 2.67 ~ "> 2.67",
+      TRUE ~ NA_character_
+    ),
     
     status_acm = ifelse(mortstat == 1, 1, 0),
     status_cvm = ifelse(mortstat == 1 & ucod_leading %in% c("001", "005"), 1, 0),
@@ -81,12 +101,9 @@ df_final <- df_imputed %>%
   filter(is_masld == 1, (is.na(RIDEXPRG) | RIDEXPRG != 1), !is.na(mortstat), !is.na(time_months), eligstat == 1) %>%
   mutate(
     TyHGB_Q = factor(ntile(TyHGB, 4), labels = c("Q1", "Q2", "Q3", "Q4")),
-    status_acm_factor = factor(status_acm),
-    status_cvm_factor = factor(status_cvm),
     event_cr = case_when(mortstat == 0 ~ 0, status_cvm == 1 ~ 1, mortstat == 1 & status_cvm == 0 ~ 2)
   )
 
-# TẠO SẴN CÁC BIẾN CHUẨN HÓA Z-SCORE CHO TOÀN BỘ CODE CÁC BƯỚC SAU
 df_final <- df_final %>%
   mutate(
     TyHGB_Z = as.numeric(scale(TyHGB)),
@@ -100,7 +117,7 @@ df_final <- df_final %>%
   mutate(
     DMDEDUC2 = case_when(
       DMDEDUC2 %in% c(1, 2) ~ "Under High School",
-      DMDEDUC2 == 3 ~ "High School to University",
+      DMDEDUC2 == 3 ~ "High School - University",
       DMDEDUC2 %in% c(4, 5) ~ "Above University",
       TRUE ~ NA_character_
     ),
@@ -108,17 +125,36 @@ df_final <- df_final %>%
       RIDRETH1 == 3 ~ "Non-Hispanic White",
       RIDRETH1 == 4 ~ "Non-Hispanic Black",
       TRUE ~ "Other Races"
-    )
+    ),
+    DMDMARTL = case_when(
+      DMDMARTL %in% c(1, 6) ~ "Married/Partner",
+      DMDMARTL %in% c(2, 3, 4) ~ "Widowed/Divorced/Separated",
+      DMDMARTL == 5 ~ "Never married",
+      TRUE ~ NA_character_
+    ),
+    RIAGENDR = factor(RIAGENDR, levels = c(1, 2), labels = c("Male", "Female")),
+    diabetes = factor(diabetes, levels = c(0, 1), labels = c("No", "Yes")),
+    hyperten = factor(hyperten, levels = c(0, 1), labels = c("No", "Yes")),
+    cvd_hx = factor(cvd_hx, levels = c(0, 1), labels = c("No", "Yes")),
+    
+    # Ép kiểu factor cho thuốc
+    DIQ050 = factor(DIQ050, levels = c(0, 1), labels = c("No", "Yes")),
+    DID070 = factor(DID070, levels = c(0, 1), labels = c("No", "Yes")),
+    htn_med = factor(htn_med, levels = c(0, 1), labels = c("No", "Yes")),
+    lipid_med = factor(lipid_med, levels = c(0, 1), labels = c("No", "Yes")),
+    
+    status_acm_factor = factor(status_acm, levels = c(0, 1), labels = c("No", "Yes")),
+    status_cvm_factor = factor(status_cvm, levels = c(0, 1), labels = c("No", "Yes")),
+    FIB4_cat = factor(FIB4_cat, levels = c("< 1.3", "1.3 - 2.67", "> 2.67"))
   ) %>%
-  drop_na(DMDEDUC2, RIDRETH1)
-
-cat_vars_final <- c("RIAGENDR", "RIDRETH1", "DMDEDUC2", "cvd_hx")
-df_final <- df_final %>% mutate(across(all_of(cat_vars_final), as.factor))
+  drop_na(DMDEDUC2, RIDRETH1, DMDMARTL, FIB4_cat)
 
 masld_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_final)
 
 covs_m2 <- "RIDAGEYR + RIAGENDR + RIDRETH1"
 covs_m3 <- paste(covs_m2, "+ hyperten + AST_ALT_ratio")
+covs_m4 <- paste(covs_m3, "+ DIQ050 + DID070 + htn_med + lipid_med")
+
 covs_str <- covs_m3
 ```
 
@@ -128,12 +164,11 @@ covs_str <- covs_m3
 #| label: tbl-baseline
 #| tbl-cap: "Table 1: Baseline characteristics of the study population according to TyHGB quartiles"
 
-vars_table1 <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "DMDEDUC2", "INDFMPIR",
+vars_table1 <- c("RIDAGEYR", "RIAGENDR", "RIDRETH1", "DMDEDUC2", "DMDMARTL", "INDFMPIR",
                  "BMXBMI", "BMXWAIST", "TyHGB", "ABSI", "WWI", "WHtR", 
-                 "LBXTC", "LBXTR", "LBDHDD", "LBDSGLSI", "LBXSATSI", "LBXSASSI", "AST_ALT_ratio",
-                 "LBXWBCSI", "LBXLYPCT", "LBXMOPCT", "LBXNEPCT", "LBXEOPCT", "LBXBAPCT",
-                 "LBDLYMNO", "LBDMONO", "LBDNENO", "LBDEONO", "LBDBANO",
-                 "LBXRBCSI", "LBXHGB", "LBXHCT", "diabetes", "hyperten", "cvd_hx", 
+                 "LBXTC", "LBXTR", "LBDHDD", "LBDSGLSI", "LBXSATSI", "LBXSASSI", "AST_ALT_ratio", "FIB4",
+                 "LBXWBCSI", "LBDLYMNO", "LBDMONO", "LBDNENO", "LBXRBCSI", "LBXHGB", "LBXHCT", 
+                 "diabetes", "hyperten", "cvd_hx", "DIQ050", "DID070", "htn_med", "lipid_med",
                  "status_acm_factor", "status_cvm_factor")
 
 tab1_gt <- masld_design %>%
@@ -149,7 +184,20 @@ tab1_gt <- masld_design %>%
       all_categorical() ~ c(0, 1)
     ), 
     missing = "no",
-    label = list(AST_ALT_ratio ~ "AST/ALT Ratio")
+    label = list(
+      RIDAGEYR ~ "Age (years)", RIAGENDR ~ "Gender", RIDRETH1 ~ "Race",
+      DMDEDUC2 ~ "Education level", DMDMARTL ~ "Marital status", INDFMPIR ~ "Family income to poverty",
+      BMXBMI ~ "Body mass index (kg/m²)", BMXWAIST ~ "Waist circumference (cm)", TyHGB ~ "TyHGB",
+      ABSI ~ "A Body Shape Index (ABSI)", WWI ~ "Weight-Adjusted Waist Index (WWI)", WHtR ~ "Waist-to-Height Ratio (WHtR)",
+      LBXTC ~ "Total cholesterol (mg/dL)", LBXTR ~ "Triglycerides (mg/dL)", LBDHDD ~ "HDL-cholesterol (mg/dL)",
+      LBDSGLSI ~ "Fasting glucose (mmol/L)", LBXSATSI ~ "ALT (U/L)", LBXSASSI ~ "AST (U/L)", AST_ALT_ratio ~ "AST/ALT Ratio",
+      FIB4 ~ "FIB-4 Index", LBXWBCSI ~ "WBC (cells/μL)", LBDLYMNO ~ "Lymphocytes (cells/μL)",
+      LBDMONO ~ "Monocytes (cells/μL)", LBDNENO ~ "Neutrophils (cells/μL)", LBXRBCSI ~ "RBC (million cells/μL)",
+      LBXHGB ~ "Hemoglobin (g/dL)", LBXHCT ~ "Hematocrit (%)",
+      diabetes ~ "Diabetes", hyperten ~ "Hypertension", cvd_hx ~ "History of cardiovascular disease",
+      DIQ050 ~ "Insulin use", DID070 ~ "Oral hypoglycemic agents", htn_med ~ "Anti-hypertensive meds", lipid_med ~ "Lipid-lowering meds",
+      status_acm_factor ~ "All-cause mortality", status_cvm_factor ~ "Cardiovascular mortality"
+    )
   ) %>%
   add_p() %>% 
   add_overall() %>%
@@ -231,19 +279,24 @@ p_dag
 #| label: tbl-cox-tyhgb
 #| tbl-cap: "Table 2: Cox regression analysis demonstrating the independent association of TyHGB with mortality"
 
-mods <- list("Model 1 (Unadjusted)" = "", "Model 2 (Demographics)" = paste("+", covs_m2), "Model 3 (Fully Adjusted)" = paste("+", covs_str))
+mods_cox <- list(
+  "Model 1 (Unadjusted)" = "", 
+  "Model 2 (Demographics)" = paste("+", covs_m2), 
+  "Model 3 (Fully Adjusted)" = paste("+", covs_str),
+  "Model 4 (+ Medications)" = paste("+", covs_m4)
+)
 
 run_main_model <- function(event_var, outcome_name) {
   res_list <- list()
-  for(m in names(mods)) {
-    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Z", mods[[m]]))
+  for(m in names(mods_cox)) {
+    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Z", mods_cox[[m]]))
     fit_cont <- svycoxph(f_cont, design = masld_design)
     sm_cont <- summary(fit_cont)
     hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB_Z", 1], sm_cont$conf.int["TyHGB_Z", 3], sm_cont$conf.int["TyHGB_Z", 4])
     p_val_cont <- sm_cont$coef["TyHGB_Z", "Pr(>|z|)"]
     p_cont <- ifelse(p_val_cont < 0.001, "<0.001", sprintf("%.3f", p_val_cont))
     
-    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods[[m]]))
+    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods_cox[[m]]))
     fit_q <- svycoxph(f_q, design = masld_design)
     sm_q <- summary(fit_q)
     
@@ -251,7 +304,7 @@ run_main_model <- function(event_var, outcome_name) {
     p_q3 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ3", "Pr(>|z|)"])
     p_q4 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ4", "Pr(>|z|)"])
     
-    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods[[m]]))
+    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods_cox[[m]]))
     fit_trend <- svycoxph(f_trend, design = masld_design)
     p_val_trend <- summary(fit_trend)$coef["TyHGB_Q_num", "Pr(>|z|)"]
     p_trend <- ifelse(p_val_trend < 0.001, "<0.001", sprintf("%.3f", p_val_trend))
@@ -274,46 +327,59 @@ df_main_tbl <- bind_rows(run_main_model("status_acm", "All-Cause Mortality"), ru
   tidyr::pivot_wider(names_from = Model, values_from = c(`HR (95% CI)`, `P value`))
 
 df_main_tbl %>% 
-  select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3")) %>% 
+  select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3"), contains("Model 4")) %>% 
   gt(groupname_col = "Outcome") %>% 
   tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0") %>%
   cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
 ```
 
-## 4. Sensitivity Analysis (Excluding deaths within 24 months)
+## 4. Sensitivity Analysis
 
 ```{r}
 #| label: tbl-sens
-#| tbl-cap: "Supplemental Table 1: Association between TyHGB and mortality excluding early events (Addressing Reverse Causation)"
+#| tbl-cap: "Supplemental Table 1: Sensitivity analyses addressing reverse causation and confounding by medication indications (All analyses performed using Model 3)"
 
 options(survey.lonely.psu = "adjust")
-des_sens <- subset(masld_design, time_months > 24)
 
-run_sens_model <- function(event_var, outcome_name) {
+des_sens_24  <- subset(masld_design, time_months > 24)
+des_sens_dm  <- subset(masld_design, DIQ050 == "No" & DID070 == "No")
+des_sens_htn <- subset(masld_design, htn_med == "No")
+des_sens_lip <- subset(masld_design, lipid_med == "No")
+
+scenarios <- list(
+  "Scenario 1: Excluding deaths within 24 months" = des_sens_24,
+  "Scenario 2: Excluding patients on Diabetes Medications" = des_sens_dm,
+  "Scenario 3: Excluding patients on Anti-hypertensive Medications" = des_sens_htn,
+  "Scenario 4: Excluding patients on Lipid-lowering Medications" = des_sens_lip
+)
+
+run_sens_scenario <- function(event_var, outcome_name) {
   res_list <- list()
-  for(m in names(mods)) {
-    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Z", mods[[m]]))
-    fit_cont <- svycoxph(f_cont, design = des_sens)
+  for(scn in names(scenarios)) {
+    d_sens <- scenarios[[scn]]
+    
+    f_cont <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Z +", covs_str))
+    fit_cont <- svycoxph(f_cont, design = d_sens)
     sm_cont <- summary(fit_cont)
     hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB_Z", 1], sm_cont$conf.int["TyHGB_Z", 3], sm_cont$conf.int["TyHGB_Z", 4])
     p_val_cont <- sm_cont$coef["TyHGB_Z", "Pr(>|z|)"]
     p_cont <- ifelse(p_val_cont < 0.001, "<0.001", sprintf("%.3f", p_val_cont))
     
-    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q", mods[[m]]))
-    fit_q <- svycoxph(f_q, design = des_sens)
+    f_q <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q +", covs_str))
+    fit_q <- svycoxph(f_q, design = d_sens)
     sm_q <- summary(fit_q)
     
     p_q2 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ2", "Pr(>|z|)"])
     p_q3 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ3", "Pr(>|z|)"])
     p_q4 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ4", "Pr(>|z|)"])
     
-    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num", mods[[m]]))
-    fit_trend <- svycoxph(f_trend, design = des_sens)
+    f_trend <- as.formula(paste("Surv(time_months, ", event_var, ") ~ TyHGB_Q_num +", covs_str))
+    fit_trend <- svycoxph(f_trend, design = d_sens)
     p_val_trend <- summary(fit_trend)$coef["TyHGB_Q_num", "Pr(>|z|)"]
     p_trend <- ifelse(p_val_trend < 0.001, "<0.001", sprintf("%.3f", p_val_trend))
     
     res_list[[length(res_list)+1]] <- data.frame(
-      Outcome = outcome_name, TyHGB = c("Continuous (per 1-SD)", "Quartile 1", "Quartile 2", "Quartile 3", "Quartile 4", "P for trend"), Model = m,
+      Outcome = outcome_name, TyHGB = c("Continuous (per 1-SD)", "Quartile 1", "Quartile 2", "Quartile 3", "Quartile 4", "P for trend"), Scenario = scn,
       `HR (95% CI)` = c(hr_cont, "Ref.", 
                         sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ2", 1], sm_q$conf.int["TyHGB_QQ2", 3], sm_q$conf.int["TyHGB_QQ2", 4]),
                         sprintf("%.3f (%.3f-%.3f)", sm_q$conf.int["TyHGB_QQ3", 1], sm_q$conf.int["TyHGB_QQ3", 3], sm_q$conf.int["TyHGB_QQ3", 4]),
@@ -324,8 +390,9 @@ run_sens_model <- function(event_var, outcome_name) {
   bind_rows(res_list)
 }
 
-df_sens_tbl <- bind_rows(run_sens_model("status_acm", "All-Cause Mortality"), run_sens_model("status_cvm", "Cardiovascular Mortality")) %>% tidyr::pivot_wider(names_from = Model, values_from = c(`HR (95% CI)`, `P value`))
-df_sens_tbl %>% select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3")) %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0") %>% cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
+df_sens_tbl <- bind_rows(run_sens_scenario("status_acm", "All-Cause Mortality"), run_sens_scenario("status_cvm", "Cardiovascular Mortality")) %>% tidyr::pivot_wider(names_from = Scenario, values_from = c(`HR (95% CI)`, `P value`))
+
+df_sens_tbl %>% select(Outcome, TyHGB, contains("Scenario 1"), contains("Scenario 2"), contains("Scenario 3"), contains("Scenario 4")) %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0") %>% cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
 ```
 
 ## 5. Competing Risk Analysis (Fine-Gray Model)
@@ -334,30 +401,26 @@ df_sens_tbl %>% select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"),
 #| label: tbl-finegray
 #| tbl-cap: "Table 3: Competing risk analysis (Fine-Gray model) evaluating the independent association of TyHGB with Cardiovascular Mortality"
 
-# Thêm TyHGB_Q và TyHGB_Q_num vào data để chạy Quartiles và Trend
 df_fg <- df_final[, c("time_months", "event_cr", "SDMVPSU", "SDMVSTRA", "WTSAF2YR", 
                       "TyHGB_Z", "TyHGB_Q", "TyHGB_Q_num", 
-                      "RIDAGEYR", "RIAGENDR", "RIDRETH1", "hyperten", "AST_ALT_ratio")]
+                      "RIDAGEYR", "RIAGENDR", "RIDRETH1", "hyperten", "AST_ALT_ratio",
+                      "DIQ050", "DID070", "htn_med", "lipid_med")]
 df_fg$event_cr_fg <- factor(df_fg$event_cr, levels = c(0, 1, 2), labels = c("censor", "CVM", "Other_Death"))
 
 fg_data <- finegray(Surv(time_months, event_cr_fg) ~ ., data = df_fg, etype = "CVM")
 fg_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR * fgwt, nest = TRUE, data = fg_data)
 
-mods <- list("Model 1 (Unadjusted)" = "", "Model 2 (Demographics)" = paste("+", covs_m2), "Model 3 (Fully Adjusted)" = paste("+", covs_str))
-
 run_fg_model <- function() {
   res_list <- list()
-  for(m in names(mods)) {
-    # 1. Continuous (per 1-SD)
-    f_cont <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Z", mods[[m]]))
+  for(m in names(mods_cox)) {
+    f_cont <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Z", mods_cox[[m]]))
     fit_cont <- suppressWarnings(svycoxph(f_cont, design = fg_design))
     sm_cont <- summary(fit_cont)
     hr_cont <- sprintf("%.3f (%.3f-%.3f)", sm_cont$conf.int["TyHGB_Z", 1], sm_cont$conf.int["TyHGB_Z", 3], sm_cont$conf.int["TyHGB_Z", 4])
     p_val_cont <- sm_cont$coef["TyHGB_Z", "Pr(>|z|)"]
     p_cont <- ifelse(p_val_cont < 0.001, "<0.001", sprintf("%.3f", p_val_cont))
     
-    # 2. Quartiles
-    f_q <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Q", mods[[m]]))
+    f_q <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Q", mods_cox[[m]]))
     fit_q <- suppressWarnings(svycoxph(f_q, design = fg_design))
     sm_q <- summary(fit_q)
     
@@ -365,8 +428,7 @@ run_fg_model <- function() {
     p_q3 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ3", "Pr(>|z|)"])
     p_q4 <- sprintf("%.3f", sm_q$coef["TyHGB_QQ4", "Pr(>|z|)"])
     
-    # 3. P for trend
-    f_trend <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Q_num", mods[[m]]))
+    f_trend <- as.formula(paste("Surv(fgstart, fgstop, fgstatus) ~ TyHGB_Q_num", mods_cox[[m]]))
     fit_trend <- suppressWarnings(svycoxph(f_trend, design = fg_design))
     p_val_trend <- summary(fit_trend)$coef["TyHGB_Q_num", "Pr(>|z|)"]
     p_trend <- ifelse(p_val_trend < 0.001, "<0.001", sprintf("%.3f", p_val_trend))
@@ -388,7 +450,7 @@ run_fg_model <- function() {
 df_fg_tbl <- run_fg_model() %>% tidyr::pivot_wider(names_from = Model, values_from = c(`sHR (95% CI)`, `P value`))
 
 df_fg_tbl %>% 
-  select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3")) %>% 
+  select(Outcome, TyHGB, contains("Model 1"), contains("Model 2"), contains("Model 3"), contains("Model 4")) %>% 
   gt(groupname_col = "Outcome") %>% 
   tab_options(row_group.font.weight = "bold", row_group.background.color = "#F0F0F0") %>%
   cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
@@ -812,19 +874,15 @@ df_thresh %>%
 ```{r}
 #| label: fig-subgroup
 #| fig-cap: "Figure 5: Subgroup analyses for the association between TyHGB index and mortality risk"
-#| fig-width: 22
-#| fig-height: 12
+#| fig-width: 24
+#| fig-height: 10
 
 df_sub <- df_final %>%
   mutate(
-    Age_group = case_when(RIDAGEYR < 40 ~ "18-39", RIDAGEYR >= 40 & RIDAGEYR < 60 ~ "40-59", RIDAGEYR >= 60 ~ ">=60"),
-    Gender = ifelse(RIAGENDR == 1, "Male", "Female"),
-    Hyperten_cat = ifelse(hyperten == 1, "Yes", "No")
+    Age_group = case_when(RIDAGEYR < 40 ~ "18-39", RIDAGEYR >= 40 & RIDAGEYR < 60 ~ "40-59", RIDAGEYR >= 60 ~ ">=60")
   ) %>%
   mutate(
-    Age_group = factor(Age_group, levels = c("18-39", "40-59", ">=60")),
-    Gender = factor(Gender, levels = c("Male", "Female")),
-    Hyperten_cat = factor(Hyperten_cat, levels = c("Yes", "No"))
+    Age_group = factor(Age_group, levels = c("18-39", "40-59", ">=60"))
   )
 
 sub_design <- svydesign(id = ~SDMVPSU, strata = ~SDMVSTRA, weights = ~WTSAF2YR, nest = TRUE, data = df_sub)
@@ -832,9 +890,10 @@ all_adj_vars <- unlist(strsplit(covs_str, " \\+ "))
 
 var_list <- list(
   "Age" = list(col = "Age_group", rm_cov = "RIDAGEYR"),
-  "Gender" = list(col = "Gender", rm_cov = "RIAGENDR"),
+  "Gender" = list(col = "RIAGENDR", rm_cov = "RIAGENDR"),
   "Race" = list(col = "RIDRETH1", rm_cov = "RIDRETH1"),
-  "Hypertension" = list(col = "Hyperten_cat", rm_cov = "hyperten")
+  "Hypertension" = list(col = "hyperten", rm_cov = "hyperten"),
+  "FIB-4 Index" = list(col = "FIB4_cat", rm_cov = NA) 
 )
 
 generate_subgroup_data <- function(event_var) {
@@ -928,7 +987,8 @@ p_acm <- draw_forest_plot(dt_acm)
 dt_cvm <- generate_subgroup_data("status_cvm")
 p_cvm <- draw_forest_plot(dt_cvm)
 
-final_forest <- wrap_elements(full = p_acm) / wrap_elements(full = p_cvm)
+# DÙNG DẤU "|" ĐỂ GHÉP NGANG 2 BIỂU ĐỒ THAY VÌ DẤU "/"
+final_forest <- wrap_elements(full = p_acm) | wrap_elements(full = p_cvm)
 final_forest <- final_forest + plot_annotation(tag_levels = 'A', tag_prefix = '(', tag_suffix = ')') & theme(plot.tag = element_text(size = 22, face = "bold")) 
 final_forest
 ```
@@ -937,48 +997,147 @@ final_forest
 
 ```{r}
 #| label: tbl-mediation
-#| tbl-cap: "Supplemental Table 5: Detailed mediation analysis of TyHGB on ACM and CVM via Uric Acid and WBC count"
+#| tbl-cap: "Supplemental Table 5: Detailed mediation analysis of TyHGB on ACM and CVM via multiple biomarkers"
 
-med_vars <- c("LBXSUA" = "Uric Acid", "LBXWBCSI" = "WBC Count")
+med_vars <- c("LBXSUA" = "Uric Acid", 
+              "LBXWBCSI" = "WBC Count",
+              "LBDNENO" = "Neutrophils", 
+              "LBXGH" = "HbA1c", 
+              "LBXRDW" = "RDW", 
+              "LBXSAL" = "ALP")
 
-run_sobel_med <- function(event_var, outcome_label) {
-  res_list <- list()
-  for(v in names(med_vars)) {
+med_vars_avail <- med_vars[names(med_vars) %in% colnames(df_final)]
+
+draw_med_plot <- function(med_name, outcome_label, 
+                          a_est, a_lci, a_uci, a_p,
+                          b_est, b_lci, b_uci, b_p,
+                          cp_est, cp_lci, cp_uci, cp_p,
+                          ct_est, ct_lci, ct_uci, ct_p,
+                          prop_med) {
+                          
+  fmt_p <- function(p) ifelse(!is.na(p) & p < 0.001, "<0.001", sprintf("=%.3f", p))
+  
+  val_a <- sprintf("%.3f (95%%CI: %.3f~%.3f, P%s)", a_est, a_lci, a_uci, fmt_p(a_p))
+  val_b <- sprintf("%.3f (95%%CI: %.3f~%.3f, P%s)", b_est, b_lci, b_uci, fmt_p(b_p))
+  val_cp <- sprintf("%.3f (95%%CI: %.3f~%.3f, P%s)", cp_est, cp_lci, cp_uci, fmt_p(cp_p))
+  val_ct <- sprintf("%.3f (95%%CI: %.3f~%.3f, P%s)", ct_est, ct_lci, ct_uci, fmt_p(ct_p))
+  
+  prop_str <- sprintf("%.2f%%", prop_med)
+  
+  df_boxes <- data.frame(
+    x = c(2, 8, 5, 2, 8),
+    y = c(2, 2, 6, 8.5, 8.5),
+    label = c("TyHGB", outcome_label, med_name, "TyHGB", outcome_label)
+  )
+  
+  ggplot() +
+    geom_segment(aes(x=3.5, xend=6.5, y=8.5, yend=8.5), arrow=arrow(length=unit(0.25,"cm")), color="#2ca25f", linewidth=1) +
+    annotate("text", x=5, y=8.85, label="Total effect", fontface="bold", size=4.5) +
+    annotate("text", x=5, y=8.1, label=val_ct, size=3.8, fontface="bold") +
+    geom_segment(aes(x=3.5, xend=6.5, y=2, yend=2), arrow=arrow(length=unit(0.25,"cm")), color="#2ca25f", linewidth=1) +
+    annotate("text", x=5, y=2.45, label="Direct effect", fontface="bold", size=4.5) +
+    annotate("text", x=5, y=1.6, label=val_cp, size=3.8, fontface="bold") +
+    geom_segment(aes(x=2.5, xend=4.2, y=2.6, yend=5.4), arrow=arrow(length=unit(0.25,"cm")), color="#2ca25f", linewidth=1) +
+    annotate("text", x=2.8, y=4.4, label=val_a, angle=52, size=3.8, fontface="bold") +
+    geom_segment(aes(x=5.8, xend=7.5, y=5.4, yend=2.6), arrow=arrow(length=unit(0.25,"cm")), color="#2ca25f", linewidth=1) +
+    annotate("text", x=7.2, y=4.4, label=val_b, angle=-52, size=3.8, fontface="bold") +
+    geom_rect(aes(xmin=x-1.4, xmax=x+1.4, ymin=y-0.55, ymax=y+0.55), data=df_boxes, fill="#e0f3f8", color="#1c9099", linewidth=0.8) +
+    geom_text(aes(x=x, y=y, label=label), data=df_boxes, fontface="bold", size=4.5) +
+    annotate("text", x=5, y=4.5, label="Proportion mediated", fontface="bold", size=4.5) +
+    annotate("text", x=5, y=3.7, label=prop_str, fontface="bold", color="#de2d26", size=5.5) +
+    coord_cartesian(xlim=c(0, 10), ylim=c(0, 10)) + theme_void() + theme(plot.margin = margin(15, 10, 15, 10))
+}
+
+res_list <- list()
+plots_acm <- list()
+plots_cvm <- list()
+
+for(outcome_type in c("ACM", "CVM")) {
+  event_var <- ifelse(outcome_type == "ACM", "status_acm", "status_cvm")
+  outcome_label <- ifelse(outcome_type == "ACM", "All-cause mortality", "Cardiovascular mortality")
+  
+  for(v in names(med_vars_avail)) {
     d_clean <- df_final[!is.na(df_final[[v]]), ]
+    if(nrow(d_clean) < 100) next 
+    
     des <- svydesign(id=~SDMVPSU, strata=~SDMVSTRA, weights=~WTSAF2YR, nest=TRUE, data=d_clean)
     
     fit_a <- svyglm(as.formula(paste(v, "~ TyHGB +", covs_str)), design = des)
+    sm_a <- summary(fit_a)
     a <- coef(fit_a)["TyHGB"]; sa <- sqrt(vcov(fit_a)["TyHGB", "TyHGB"]) 
+    p_a <- if("Pr(>|t|)" %in% colnames(sm_a$coefficients)) sm_a$coefficients["TyHGB", "Pr(>|t|)"] else NA
     
     fit_b <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", v, "+", covs_str)), design = des)
     b <- coef(fit_b)[v]; sb <- sqrt(vcov(fit_b)[v, v]) 
+    p_b <- summary(fit_b)$coef[v, "Pr(>|z|)"]
+    
     c_prime <- coef(fit_b)["TyHGB"]; sc_prime <- sqrt(vcov(fit_b)["TyHGB", "TyHGB"])
+    p_ade <- summary(fit_b)$coef["TyHGB", "Pr(>|z|)"]
     
     fit_c <- svycoxph(as.formula(paste("Surv(time_months,", event_var, ") ~ TyHGB +", covs_str)), design = des)
     c_tot <- coef(fit_c)["TyHGB"]; sc_tot <- sqrt(vcov(fit_c)["TyHGB", "TyHGB"])
+    p_ctot <- summary(fit_c)$coef["TyHGB", "Pr(>|z|)"]
     
     ab <- a * b; seb <- sqrt(a^2 * sb^2 + b^2 * sa^2)
     z_ab <- ab / seb; p_ab <- 2 * (1 - pnorm(abs(z_ab)))
     
     prop_med <- (ab / c_tot) * 100
-    if(prop_med < 0) prop_med <- 0
+    if(is.na(prop_med) || prop_med < 0) prop_med <- 0
     
     fmt <- function(est, se) sprintf("%.3f (%.3f to %.3f)", est, est - 1.96*se, est + 1.96*se)
-    fmt_p <- function(p) ifelse(p < 0.001, "<0.001", sprintf("%.3f", p))
-    p_ade <- summary(fit_b)$coef["TyHGB", "Pr(>|z|)"]
+    fmt_p <- function(p) ifelse(!is.na(p) & p < 0.001, "<0.001", sprintf("%.3f", p))
     
     res_list[[length(res_list)+1]] <- data.frame(
-      Outcome = outcome_label, Mediator = med_vars[v],
+      Outcome = outcome_label, Mediator = med_vars_avail[v],
       `ACME (95% CI)` = fmt(ab, seb), `P (ACME)` = fmt_p(p_ab),
       `ADE (95% CI)` = fmt(c_prime, sc_prime), `P (ADE)` = fmt_p(p_ade),
       `Prop. Mediated (%)` = sprintf("%.2f%%", prop_med), check.names = FALSE
     )
+    
+    p_med <- draw_med_plot(
+      med_name = med_vars_avail[v], outcome_label = outcome_label,
+      a_est = a, a_lci = a - 1.96*sa, a_uci = a + 1.96*sa, a_p = p_a,
+      b_est = exp(b), b_lci = exp(b - 1.96*sb), b_uci = exp(b + 1.96*sb), b_p = p_b,
+      cp_est = exp(c_prime), cp_lci = exp(c_prime - 1.96*sc_prime), cp_uci = exp(c_prime + 1.96*sc_prime), cp_p = p_ade,
+      ct_est = exp(c_tot), ct_lci = exp(c_tot - 1.96*sc_tot), ct_uci = exp(c_tot + 1.96*sc_tot), ct_p = p_ctot,
+      prop_med = prop_med
+    )
+    
+    # PHÂN LOẠI BIỂU ĐỒ VÀO ĐÚNG LIST ACM HAY CVM
+    if(outcome_type == "ACM") {
+      plots_acm[[length(plots_acm)+1]] <- p_med
+    } else {
+      plots_cvm[[length(plots_cvm)+1]] <- p_med
+    }
   }
-  bind_rows(res_list)
 }
 
-df_med_tbl <- bind_rows(run_sobel_med("status_acm", "All-Cause Mortality"), run_sobel_med("status_cvm", "Cardiovascular Mortality"))
-df_med_tbl %>% gt(groupname_col = "Outcome") %>% tab_options(row_group.font.weight = "bold", row_group.background.color = "#E8F4F0") %>% cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
+df_med_tbl <- bind_rows(res_list)
+if(!is.null(df_med_tbl) && nrow(df_med_tbl) > 0) {
+  df_med_tbl %>% gt(groupname_col = "Outcome") %>% 
+    tab_options(row_group.font.weight = "bold", row_group.background.color = "#E8F4F0") %>% 
+    cols_align(align = "center") %>% cols_align(align = "left", columns = 1)
+} else {
+  print("Không tìm thấy dữ liệu cho các biến Mediation được yêu cầu.")
+}
+```
+
+```{r}
+#| label: fig-mediation
+#| fig-cap: "Supplemental Figure 2: Mediation analysis path diagrams of the TyHGB index on mortality via multiple biomarkers"
+#| fig-width: 24
+#| fig-height: 20
+
+# GHÉP 3 CỘT CHO TỪNG KẾT CỤC, SAU ĐÓ XẾP DỌC ACM TRÊN, CVM DƯỚI
+if(length(plots_acm) > 0 & length(plots_cvm) > 0) {
+  p_acm_all <- wrap_plots(plots_acm, ncol = 3)
+  p_cvm_all <- wrap_plots(plots_cvm, ncol = 3)
+  
+  final_med <- (p_acm_all / p_cvm_all) + 
+    plot_annotation(tag_levels = 'A', tag_prefix = '(', tag_suffix = ')') & 
+    theme(plot.tag = element_text(size = 20, face = "bold"))
+  final_med
+}
 ```
 
 ## 13. Construction of Nomograms
@@ -993,10 +1152,6 @@ model_vars <- c("TyHGB", "RIDAGEYR", "RIAGENDR", "RIDRETH1", "hyperten", "AST_AL
 sys_vars <- c("time_months", "status_acm", "status_cvm", "event_cr", "WTSAF2YR")
 
 df_nomo_rms <- df_final %>% select(all_of(c(sys_vars, model_vars))) %>% drop_na() %>% as.data.frame() 
-
-df_nomo_rms$RIAGENDR <- factor(df_nomo_rms$RIAGENDR, levels = c(1, 2), labels = c("Male", "Female"))
-df_nomo_rms$hyperten <- factor(df_nomo_rms$hyperten, levels = c(0, 1), labels = c("No", "Yes"))
-df_nomo_rms$RIDRETH1 <- as.factor(df_nomo_rms$RIDRETH1)
 
 Hmisc::label(df_nomo_rms$TyHGB)    <- "TyHGB Index"
 Hmisc::label(df_nomo_rms$RIDAGEYR) <- "Age (years)"
